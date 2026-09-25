@@ -9,3 +9,13 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 22
+      - key: DATABASE_URL
+        fromDatabase:
+          name: restaurant-db
+          property: connectionString
+
+databases:
+  - name: restaurant-db
+    plan: free
+    databaseName: restaurant
+    user: restaurant

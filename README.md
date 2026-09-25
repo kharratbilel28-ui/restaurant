@@ -1,4 +1,25 @@
-# React + TypeScript + Vite
+# ServicePilot - gestion de restaurant
+
+Application de gestion d'un restaurant : reservations, salle, commandes, cuisine, caisse, stock, menu, finances et sessions par role.
+
+## Demarrage local
+
+```bash
+npm install
+npm run dev
+npm run api
+```
+
+Sans `DATABASE_URL`, l'API utilise `db/restaurant.json`. Sur Render, `DATABASE_URL` est fournie automatiquement par le service PostgreSQL declare dans `render.yaml` et les donnees sont migrees au premier demarrage.
+
+## Comptes de demonstration
+
+- Gerante : `1234`
+- Serveur : `2222`
+- Cuisine : `3333`
+- Caissier : `4444`
+
+Ces codes doivent etre remplaces avant une mise en production.
 
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
 

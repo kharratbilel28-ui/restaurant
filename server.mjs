@@ -3,15 +3,17 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
+import { initPostgres, readPostgres, savePostgres } from './db/postgres.mjs'
 
 const root = dirname(fileURLToPath(import.meta.url))
 const databasePath = resolve(root, 'db/restaurant.json')
 const port = Number(process.env.PORT || process.env.API_PORT || 8787)
 const sessionDurationMs = 8 * 60 * 60 * 1000
 const sessions = new Map()
+const usePostgres = Boolean(process.env.DATABASE_URL)
 
 async function readDatabase() {
-  const database = JSON.parse(await readFile(databasePath, 'utf8'))
+  const database = usePostgres ? await readPostgres() : JSON.parse(await readFile(databasePath, 'utf8'))
   database.inventory ||= [
     { id: 'inv-1', name: 'Tomates coeur de boeuf', quantity: 8, unit: 'kg', minimum: 10, supplier: 'Metro' },
     { id: 'inv-2', name: 'Filet de bar', quantity: 14, unit: 'pieces', minimum: 8, supplier: 'La Maree' },
@@ -26,7 +28,8 @@ async function readDatabase() {
 }
 
 async function saveDatabase(database) {
-  await writeFile(databasePath, JSON.stringify(database, null, 2) + '\n')
+  if (usePostgres) return savePostgres(database)
+  return writeFile(databasePath, JSON.stringify(database, null, 2) + '\n')
 }
 
 function send(response, status, payload) {
@@ -180,4 +183,15 @@ const server = createServer(async (request, response) => {
   }
 })
 
-server.listen(port, () => console.log(`Restaurant API listening on http://localhost:${port}`))
+async function start() {
+  if (usePostgres) {
+    const fallback = JSON.parse(await readFile(databasePath, 'utf8'))
+    await initPostgres(fallback)
+    console.log('PostgreSQL persistence enabled')
+  } else {
+    console.log('Local JSON persistence enabled')
+  }
+  server.listen(port, () => console.log(`Restaurant API listening on http://localhost:${port}`))
+}
+
+start().catch((error) => { console.error('Unable to initialize persistence', error); process.exit(1) })
