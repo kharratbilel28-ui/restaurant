@@ -26,10 +26,30 @@
     }
   ],
   "users": [
-    { "id": "user-manager", "name": "Louise Martin", "role": "manager", "pin": "1234" },
-    { "id": "user-server", "name": "Équipe salle", "role": "server", "pin": "2222" },
-    { "id": "user-kitchen", "name": "Équipe cuisine", "role": "kitchen", "pin": "3333" },
-    { "id": "user-cashier", "name": "Caisse", "role": "cashier", "pin": "4444" }
+    {
+      "id": "user-manager",
+      "name": "Louise Martin",
+      "role": "manager",
+      "pin": "1234"
+    },
+    {
+      "id": "user-server",
+      "name": "Équipe salle",
+      "role": "server",
+      "pin": "2222"
+    },
+    {
+      "id": "user-kitchen",
+      "name": "Équipe cuisine",
+      "role": "kitchen",
+      "pin": "3333"
+    },
+    {
+      "id": "user-cashier",
+      "name": "Caisse",
+      "role": "cashier",
+      "pin": "4444"
+    }
   ],
   "orders": [
     {
@@ -103,6 +123,32 @@
       "seats": 6,
       "status": "free",
       "zone": "Salle principale"
+    }
+  ],
+  "inventory": [
+    {
+      "id": "inv-1",
+      "name": "Tomates coeur de boeuf",
+      "quantity": 8,
+      "unit": "kg",
+      "minimum": 10,
+      "supplier": "Metro"
+    },
+    {
+      "id": "inv-2",
+      "name": "Filet de bar",
+      "quantity": 14,
+      "unit": "pieces",
+      "minimum": 8,
+      "supplier": "La Maree"
+    },
+    {
+      "id": "inv-3",
+      "name": "Beurre doux",
+      "quantity": 3,
+      "unit": "kg",
+      "minimum": 5,
+      "supplier": "Transgourmet"
     }
   ]
 }

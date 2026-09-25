@@ -11,7 +11,13 @@ const sessionDurationMs = 8 * 60 * 60 * 1000
 const sessions = new Map()
 
 async function readDatabase() {
-  return JSON.parse(await readFile(databasePath, 'utf8'))
+  const database = JSON.parse(await readFile(databasePath, 'utf8'))
+  database.inventory ||= [
+    { id: 'inv-1', name: 'Tomates coeur de boeuf', quantity: 8, unit: 'kg', minimum: 10, supplier: 'Metro' },
+    { id: 'inv-2', name: 'Filet de bar', quantity: 14, unit: 'pieces', minimum: 8, supplier: 'La Maree' },
+    { id: 'inv-3', name: 'Beurre doux', quantity: 3, unit: 'kg', minimum: 5, supplier: 'Transgourmet' }
+  ]
+  return database
 }
 
 async function saveDatabase(database) {
@@ -94,6 +100,19 @@ const server = createServer(async (request, response) => {
     if (url.pathname === '/api/reservations' && request.method === 'GET') {
       if (!requireSession(request, response)) return
       return send(response, 200, database.reservations)
+    }
+    if (url.pathname === '/api/inventory' && request.method === 'GET') {
+      if (!requireSession(request, response)) return
+      return send(response, 200, database.inventory)
+    }
+    if (url.pathname.startsWith('/api/inventory/') && request.method === 'PATCH') {
+      if (!['manager', 'kitchen'].includes(roleFrom(request))) return send(response, 403, { error: 'Droits insuffisants' })
+      const item = database.inventory.find((entry) => entry.id === url.pathname.split('/').pop())
+      if (!item) return send(response, 404, { error: 'Produit introuvable' })
+      const input = await body(request)
+      item.quantity = Number(input.quantity)
+      await saveDatabase(database)
+      return send(response, 200, item)
     }
     if (url.pathname === '/api/reservations' && request.method === 'POST') {
       if (!requireSession(request, response)) return
