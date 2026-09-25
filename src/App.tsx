@@ -9,8 +9,8 @@ const makeIcon = (symbol: string): IconComponent => ({ size = 18 }) => <span cla
 const Archive = makeIcon('▣'), ArrowUpRight = makeIcon('↗'), Bell = makeIcon('◌'), CalendarDays = makeIcon('▦')
 const ChevronDown = makeIcon('⌄'), ChefHat = makeIcon('♨'), CircleDollarSign = makeIcon('€'), ClipboardList = makeIcon('☷')
 const Clock3 = makeIcon('◷'), LayoutDashboard = makeIcon('▤'), Map = makeIcon('⌖'), MoreHorizontal = makeIcon('···')
-const Package = makeIcon('□'), Plus = makeIcon('+'), Receipt = makeIcon('▤'), Settings = makeIcon('⚙')
-const ShoppingBasket = makeIcon('⌑'), Utensils = makeIcon('♧'), Users = makeIcon('♙'), WalletCards = makeIcon('▭')
+const Package = makeIcon('□'), Plus = makeIcon('+'), Settings = makeIcon('⚙')
+const Utensils = makeIcon('♧'), Users = makeIcon('♙'), WalletCards = makeIcon('▭')
 
 type NavItem = { label: string; icon: IconComponent; badge?: string }
 const navItems: NavItem[] = [
