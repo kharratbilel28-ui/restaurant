@@ -3,7 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
-import { initPostgres, readPostgres, savePostgres } from './db/postgres.mjs'
+import { findUserByCredentials, initPostgres, readPostgres, savePostgres } from './db/postgres.mjs'
 
 const root = dirname(fileURLToPath(import.meta.url))
 const databasePath = resolve(root, 'db/restaurant.json')
@@ -11,9 +11,10 @@ const port = Number(process.env.PORT || process.env.API_PORT || 8787)
 const sessionDurationMs = 8 * 60 * 60 * 1000
 const sessions = new Map()
 const usePostgres = Boolean(process.env.DATABASE_URL)
+const defaultRestaurantId = 'restaurant-demo'
 
-async function readDatabase() {
-  const database = usePostgres ? await readPostgres() : JSON.parse(await readFile(databasePath, 'utf8'))
+async function readDatabase(restaurantId = defaultRestaurantId) {
+  const database = usePostgres ? await readPostgres(restaurantId) : JSON.parse(await readFile(databasePath, 'utf8'))
   database.inventory ||= [
     { id: 'inv-1', name: 'Tomates coeur de boeuf', quantity: 8, unit: 'kg', minimum: 10, supplier: 'Metro' },
     { id: 'inv-2', name: 'Filet de bar', quantity: 14, unit: 'pieces', minimum: 8, supplier: 'La Maree' },
@@ -27,8 +28,8 @@ async function readDatabase() {
   return database
 }
 
-async function saveDatabase(database) {
-  if (usePostgres) return savePostgres(database)
+async function saveDatabase(database, restaurantId = defaultRestaurantId) {
+  if (usePostgres) return savePostgres(restaurantId, database)
   return writeFile(databasePath, JSON.stringify(database, null, 2) + '\n')
 }
 
@@ -81,15 +82,17 @@ const server = createServer(async (request, response) => {
   if (request.method === 'OPTIONS') return send(response, 204, {})
   const url = new URL(request.url || '/', `http://${request.headers.host}`)
   try {
-    const database = await readDatabase()
     if (url.pathname === '/api/health') return send(response, 200, { ok: true, service: 'restaurant-api' })
     if (url.pathname === '/api/auth/login' && request.method === 'POST') {
       const input = await body(request)
-      const user = database.users?.find((item) => item.role === input.role && item.pin === input.pin)
+      const user = usePostgres
+        ? await findUserByCredentials(input.role, input.pin)
+        : (await readDatabase()).users?.find((item) => item.role === input.role && item.pin === input.pin)
       if (!user) return send(response, 401, { error: 'Rôle ou code incorrect' })
       const token = randomUUID()
       const expiresAt = Date.now() + sessionDurationMs
-      sessions.set(token, { userId: user.id, name: user.name, role: user.role, expiresAt })
+      const restaurantId = user.restaurant_id || user.restaurantId || defaultRestaurantId
+      sessions.set(token, { userId: user.id, name: user.name, role: user.role, restaurantId, expiresAt })
       return send(response, 200, { token, expiresAt, user: { id: user.id, name: user.name, role: user.role } })
     }
     if (url.pathname === '/api/auth/me' && request.method === 'GET') {
@@ -101,6 +104,10 @@ const server = createServer(async (request, response) => {
       if (session) sessions.delete(session.token)
       return send(response, 204, {})
     }
+    if (request.method === 'GET' && !url.pathname.startsWith('/api/')) return serveFrontend(request, response, url.pathname)
+    const activeSession = sessionFrom(request)
+    const restaurantId = activeSession?.restaurantId || defaultRestaurantId
+    const database = await readDatabase(restaurantId)
     if (url.pathname === '/api/dashboard' && request.method === 'GET') {
       if (!requireSession(request, response)) return
       return send(response, 200, { reservations: database.reservations, orders: database.orders, tables: database.tables, stats: { reservations: 24, covers: 86, revenue: 2840, averageDuration: '1h42' } })
@@ -123,7 +130,7 @@ const server = createServer(async (request, response) => {
       if (!input.name || !input.price) return send(response, 400, { error: 'Nom et prix obligatoires' })
       const dish = { id: `dish-${Date.now()}`, name: input.name, price: Number(input.price), image: input.image || '', active: true }
       database.menu.push(dish)
-      await saveDatabase(database)
+      await saveDatabase(database, restaurantId)
       return send(response, 201, dish)
     }
     if (url.pathname === '/api/hardware/cash-drawer' && request.method === 'POST') {
@@ -136,7 +143,7 @@ const server = createServer(async (request, response) => {
       if (!item) return send(response, 404, { error: 'Produit introuvable' })
       const input = await body(request)
       item.quantity = Number(input.quantity)
-      await saveDatabase(database)
+      await saveDatabase(database, restaurantId)
       return send(response, 200, item)
     }
     if (url.pathname === '/api/reservations' && request.method === 'POST') {
@@ -145,7 +152,7 @@ const server = createServer(async (request, response) => {
       if (!input.name || !input.time || !input.people) return send(response, 400, { error: 'name, time et people sont obligatoires' })
       const reservation = { id: `res-${Date.now()}`, name: input.name, time: input.time, people: Number(input.people), table: input.table || 'À attribuer', status: 'confirmed' }
       database.reservations.push(reservation)
-      await saveDatabase(database)
+      await saveDatabase(database, restaurantId)
       return send(response, 201, reservation)
     }
     if (url.pathname === '/api/orders' && request.method === 'POST') {
@@ -155,7 +162,7 @@ const server = createServer(async (request, response) => {
       const lines = input.items.map((item) => ({ name: item.name, quantity: Number(item.quantity), price: Number(item.price) }))
       const order = { id: String(1050 + database.orders.length), table: input.table, items: lines.reduce((sum, item) => sum + item.quantity, 0), amount: Number(input.amount || 0), status: 'received', note: input.note || '', lines, createdAt: new Date().toISOString() }
       database.orders.unshift(order)
-      await saveDatabase(database)
+      await saveDatabase(database, restaurantId)
       return send(response, 201, order)
     }
     if (url.pathname.startsWith('/api/orders/') && request.method === 'PATCH') {
@@ -172,7 +179,7 @@ const server = createServer(async (request, response) => {
       if (['preparing', 'ready'].includes(nextStatus) && !['manager', 'kitchen'].includes(roleFrom(request))) return send(response, 403, { error: 'Seule la cuisine peut traiter cette commande' })
       order.status = nextStatus
       if (nextStatus === 'paid') order.paymentMethod = input.paymentMethod === 'cash' ? 'cash' : 'card'
-      await saveDatabase(database)
+      await saveDatabase(database, restaurantId)
       return send(response, 200, order)
     }
     if (request.method === 'GET') return serveFrontend(request, response, url.pathname)

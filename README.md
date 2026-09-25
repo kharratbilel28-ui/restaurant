@@ -10,7 +10,9 @@ npm run dev
 npm run api
 ```
 
-Sans `DATABASE_URL`, l'API utilise `db/restaurant.json`. Sur Render, `DATABASE_URL` est fournie automatiquement par le service PostgreSQL declare dans `render.yaml` et les donnees sont migrees au premier demarrage.
+Sans `DATABASE_URL`, l'API utilise `db/restaurant.json`. Sur Render, `DATABASE_URL` est fournie automatiquement par le service PostgreSQL declare dans `render.yaml`.
+
+Au premier demarrage PostgreSQL, les donnees JSON existantes (ou l'ancien etat JSONB s'il existe) sont migrees dans des tables relationnelles : `restaurants`, `users`, `reservations`, `dining_tables`, `menu_items`, `inventory_items`, `orders` et `order_lines`. Les donnees operationnelles portent toutes un `restaurant_id`, et l'API selectionne ce tenant depuis la session authentifiee. Le jeu initial est migre comme restaurant `restaurant-demo` (`Le Mijoté`).
 
 ## Comptes de demonstration
 
