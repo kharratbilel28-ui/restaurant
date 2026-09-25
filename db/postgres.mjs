@@ -9,6 +9,8 @@ const schema = [
   `CREATE TABLE IF NOT EXISTS dining_tables (restaurant_id text NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE, id text NOT NULL, seats integer NOT NULL, status text NOT NULL, zone text NOT NULL, PRIMARY KEY (restaurant_id, id))`,
   `CREATE TABLE IF NOT EXISTS menu_items (restaurant_id text NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE, id text NOT NULL, name text NOT NULL, price numeric(10,2) NOT NULL, image text NOT NULL DEFAULT '', active boolean NOT NULL DEFAULT true, PRIMARY KEY (restaurant_id, id))`,
   `CREATE TABLE IF NOT EXISTS inventory_items (restaurant_id text NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE, id text NOT NULL, name text NOT NULL, quantity numeric(12,3) NOT NULL, unit text NOT NULL, minimum numeric(12,3) NOT NULL, supplier text NOT NULL, PRIMARY KEY (restaurant_id, id))`,
+  `CREATE TABLE IF NOT EXISTS stock_withdrawals (restaurant_id text NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE, id text NOT NULL, reason text NOT NULL, note text NOT NULL DEFAULT '', created_by text NOT NULL DEFAULT '', created_at timestamptz NOT NULL, PRIMARY KEY (restaurant_id, id))`,
+  `CREATE TABLE IF NOT EXISTS stock_withdrawal_items (restaurant_id text NOT NULL, withdrawal_id text NOT NULL, line_index integer NOT NULL, inventory_item_id text NOT NULL, name text NOT NULL, quantity numeric(12,3) NOT NULL, unit text NOT NULL, PRIMARY KEY (restaurant_id, withdrawal_id, line_index), FOREIGN KEY (restaurant_id, withdrawal_id) REFERENCES stock_withdrawals(restaurant_id, id) ON DELETE CASCADE)`,
   `CREATE TABLE IF NOT EXISTS orders (restaurant_id text NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE, id text NOT NULL, table_name text NOT NULL, item_count integer NOT NULL, amount numeric(10,2) NOT NULL, status text NOT NULL, note text NOT NULL DEFAULT '', payment_method text, created_at timestamptz NOT NULL, PRIMARY KEY (restaurant_id, id))`,
   `CREATE TABLE IF NOT EXISTS order_lines (restaurant_id text NOT NULL, order_id text NOT NULL, line_index integer NOT NULL, name text NOT NULL, quantity numeric(12,3) NOT NULL, price numeric(10,2) NOT NULL, PRIMARY KEY (restaurant_id, order_id, line_index), FOREIGN KEY (restaurant_id, order_id) REFERENCES orders(restaurant_id, id) ON DELETE CASCADE)`,
   `CREATE INDEX IF NOT EXISTS reservations_by_service ON reservations (restaurant_id, reservation_time)`,
@@ -58,6 +60,10 @@ export async function initPostgres(fallbackState) {
       await client.query('INSERT INTO orders (restaurant_id, id, table_name, item_count, amount, status, note, payment_method, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)', ['restaurant-demo', order.id, order.table, order.items, order.amount, order.status === 'kitchen' ? 'received' : order.status, order.note || '', order.paymentMethod || null, order.createdAt])
       for (const [index, line] of (order.lines || []).entries()) await client.query('INSERT INTO order_lines (restaurant_id, order_id, line_index, name, quantity, price) VALUES ($1, $2, $3, $4, $5, $6)', ['restaurant-demo', order.id, index, line.name, line.quantity, line.price])
     }
+    for (const withdrawal of (state.stockWithdrawals || [])) {
+      await client.query('INSERT INTO stock_withdrawals (restaurant_id, id, reason, note, created_by, created_at) VALUES ($1, $2, $3, $4, $5, $6)', ['restaurant-demo', withdrawal.id, withdrawal.reason, withdrawal.note || '', withdrawal.createdBy || '', withdrawal.createdAt])
+      for (const [index, item] of withdrawal.items.entries()) await client.query('INSERT INTO stock_withdrawal_items (restaurant_id, withdrawal_id, line_index, inventory_item_id, name, quantity, unit) VALUES ($1, $2, $3, $4, $5, $6, $7)', ['restaurant-demo', withdrawal.id, index, item.inventoryItemId, item.name, item.quantity, item.unit])
+    }
     await client.query('COMMIT')
   } catch (error) {
     await client.query('ROLLBACK')
@@ -75,20 +81,30 @@ export async function findUserByCredentials(role, pin) {
 export async function readPostgres(restaurantId) {
   const client = await pool.connect()
   try {
-    const [reservations, users, orders, tables, inventory, menu] = await Promise.all([
+    const [reservations, users, orders, tables, inventory, menu, withdrawals] = await Promise.all([
       client.query('SELECT id, reservation_time AS time, customer_name AS name, people, table_name AS "table", status FROM reservations WHERE restaurant_id = $1 ORDER BY reservation_time', [restaurantId]),
       client.query('SELECT id, name, role, pin FROM users WHERE restaurant_id = $1', [restaurantId]),
       client.query('SELECT id, table_name AS "table", item_count AS items, amount, status, note, payment_method AS "paymentMethod", created_at AS "createdAt" FROM orders WHERE restaurant_id = $1 ORDER BY created_at DESC', [restaurantId]),
       client.query('SELECT id, seats, status, zone FROM dining_tables WHERE restaurant_id = $1 ORDER BY zone, id', [restaurantId]),
       client.query('SELECT id, name, quantity, unit, minimum, supplier FROM inventory_items WHERE restaurant_id = $1 ORDER BY name', [restaurantId]),
       client.query('SELECT id, name, price, image, active FROM menu_items WHERE restaurant_id = $1 ORDER BY name', [restaurantId]),
+      client.query('SELECT id, reason, note, created_by AS "createdBy", created_at AS "createdAt" FROM stock_withdrawals WHERE restaurant_id = $1 ORDER BY created_at DESC', [restaurantId]),
     ])
-    const lines = await client.query('SELECT order_id, name, quantity, price FROM order_lines WHERE restaurant_id = $1 ORDER BY order_id, line_index', [restaurantId])
+    const [lines, withdrawalLines] = await Promise.all([
+      client.query('SELECT order_id, name, quantity, price FROM order_lines WHERE restaurant_id = $1 ORDER BY order_id, line_index', [restaurantId]),
+      client.query('SELECT withdrawal_id, inventory_item_id AS "inventoryItemId", name, quantity, unit FROM stock_withdrawal_items WHERE restaurant_id = $1 ORDER BY withdrawal_id, line_index', [restaurantId]),
+    ])
     const linesByOrder = new Map()
     for (const line of lines.rows) {
       const grouped = linesByOrder.get(line.order_id) || []
       grouped.push({ name: line.name, quantity: Number(line.quantity), price: Number(line.price) })
       linesByOrder.set(line.order_id, grouped)
+    }
+    const withdrawalItems = new Map()
+    for (const item of withdrawalLines.rows) {
+      const grouped = withdrawalItems.get(item.withdrawal_id) || []
+      grouped.push({ ...item, quantity: Number(item.quantity) })
+      withdrawalItems.set(item.withdrawal_id, grouped)
     }
     return {
       reservations: reservations.rows,
@@ -97,6 +113,7 @@ export async function readPostgres(restaurantId) {
       tables: tables.rows,
       inventory: inventory.rows.map((item) => ({ ...item, quantity: Number(item.quantity), minimum: Number(item.minimum) })),
       menu: menu.rows.map((item) => ({ ...item, price: Number(item.price) })),
+      stockWithdrawals: withdrawals.rows.map((withdrawal) => ({ ...withdrawal, items: withdrawalItems.get(withdrawal.id) || [] })),
     }
   } finally {
     client.release()
@@ -115,6 +132,11 @@ export async function savePostgres(restaurantId, state) {
       await client.query('INSERT INTO orders (restaurant_id, id, table_name, item_count, amount, status, note, payment_method, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (restaurant_id, id) DO UPDATE SET table_name = EXCLUDED.table_name, item_count = EXCLUDED.item_count, amount = EXCLUDED.amount, status = EXCLUDED.status, note = EXCLUDED.note, payment_method = EXCLUDED.payment_method', [restaurantId, order.id, order.table, order.items, order.amount, order.status, order.note || '', order.paymentMethod || null, order.createdAt])
       await client.query('DELETE FROM order_lines WHERE restaurant_id = $1 AND order_id = $2', [restaurantId, order.id])
       for (const [index, line] of (order.lines || []).entries()) await client.query('INSERT INTO order_lines (restaurant_id, order_id, line_index, name, quantity, price) VALUES ($1, $2, $3, $4, $5, $6)', [restaurantId, order.id, index, line.name, line.quantity, line.price])
+    }
+    for (const withdrawal of (state.stockWithdrawals || [])) {
+      await client.query('INSERT INTO stock_withdrawals (restaurant_id, id, reason, note, created_by, created_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (restaurant_id, id) DO UPDATE SET reason = EXCLUDED.reason, note = EXCLUDED.note', [restaurantId, withdrawal.id, withdrawal.reason, withdrawal.note || '', withdrawal.createdBy || '', withdrawal.createdAt])
+      await client.query('DELETE FROM stock_withdrawal_items WHERE restaurant_id = $1 AND withdrawal_id = $2', [restaurantId, withdrawal.id])
+      for (const [index, item] of withdrawal.items.entries()) await client.query('INSERT INTO stock_withdrawal_items (restaurant_id, withdrawal_id, line_index, inventory_item_id, name, quantity, unit) VALUES ($1, $2, $3, $4, $5, $6, $7)', [restaurantId, withdrawal.id, index, item.inventoryItemId, item.name, item.quantity, item.unit])
     }
     await client.query('COMMIT')
   } catch (error) {

@@ -25,6 +25,8 @@ async function readDatabase(restaurantId = defaultRestaurantId) {
     { id: 'dish-2', name: 'Filet de bar', price: 24, image: 'https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?auto=format&fit=crop&w=400&q=80', active: true },
     { id: 'dish-3', name: 'Dessert maison', price: 9, image: 'https://images.unsplash.com/photo-1551024506-0bccd828d307?auto=format&fit=crop&w=400&q=80', active: true }
   ]
+  database.stockWithdrawals ||= []
+  for (const order of database.orders) if (order.status === 'kitchen') order.status = 'received'
   return database
 }
 
@@ -120,6 +122,10 @@ const server = createServer(async (request, response) => {
       if (!requireSession(request, response)) return
       return send(response, 200, database.inventory)
     }
+    if (url.pathname === '/api/inventory/withdrawals' && request.method === 'GET') {
+      if (!requireSession(request, response)) return
+      return send(response, 200, database.stockWithdrawals || [])
+    }
     if (url.pathname === '/api/menu' && request.method === 'GET') {
       if (!requireSession(request, response)) return
       return send(response, 200, database.menu)
@@ -146,6 +152,18 @@ const server = createServer(async (request, response) => {
       await saveDatabase(database, restaurantId)
       return send(response, 200, item)
     }
+    if (url.pathname === '/api/inventory/withdrawals' && request.method === 'POST') {
+      if (!['manager', 'kitchen'].includes(roleFrom(request))) return send(response, 403, { error: 'Seule la cuisine ou la gérance peut enregistrer une sortie' })
+      const input = await body(request)
+      if (!Array.isArray(input.items) || input.items.length === 0) return send(response, 400, { error: 'Ajoutez au moins un produit au bon de sortie' })
+      const lines = input.items.map((line) => ({ item: database.inventory.find((item) => item.id === line.inventoryItemId), quantity: Number(line.quantity) }))
+      if (lines.some((line) => !line.item || !Number.isFinite(line.quantity) || line.quantity <= 0 || line.quantity > line.item.quantity)) return send(response, 400, { error: 'Produit ou quantité de sortie invalide' })
+      for (const line of lines) line.item.quantity = Number((line.item.quantity - line.quantity).toFixed(3))
+      const withdrawal = { id: `withdrawal-${Date.now()}`, reason: 'Sortie vers la cuisine', note: input.note || '', createdAt: new Date().toISOString(), createdBy: sessionFrom(request)?.userId || '', items: lines.map(({ item, quantity }) => ({ inventoryItemId: item.id, name: item.name, quantity, unit: item.unit })) }
+      database.stockWithdrawals.unshift(withdrawal)
+      await saveDatabase(database, restaurantId)
+      return send(response, 201, { withdrawal, inventory: database.inventory })
+    }
     if (url.pathname === '/api/reservations' && request.method === 'POST') {
       if (!requireSession(request, response)) return
       const input = await body(request)
@@ -167,16 +185,17 @@ const server = createServer(async (request, response) => {
     }
     if (url.pathname.startsWith('/api/orders/') && request.method === 'PATCH') {
       if (!sessionFrom(request)) return send(response, 401, { error: 'Session absente ou expirée' })
-      if (!['manager', 'kitchen', 'cashier'].includes(roleFrom(request))) return send(response, 403, { error: 'Droits insuffisants' })
+      if (!['manager', 'kitchen', 'cashier', 'server'].includes(roleFrom(request))) return send(response, 403, { error: 'Droits insuffisants' })
       const id = url.pathname.split('/').pop()
       const order = database.orders.find((item) => item.id === id)
       if (!order) return send(response, 404, { error: 'Commande introuvable' })
       const input = await body(request)
       const nextStatus = input.status
-      const allowedStatuses = ['received', 'preparing', 'ready', 'paid']
+      const allowedStatuses = ['received', 'preparing', 'ready', 'served', 'paid']
       if (!allowedStatuses.includes(nextStatus)) return send(response, 400, { error: 'Statut de commande invalide' })
       if (nextStatus === 'paid' && !['manager', 'cashier'].includes(roleFrom(request))) return send(response, 403, { error: 'Seule la caisse peut encaisser' })
       if (['preparing', 'ready'].includes(nextStatus) && !['manager', 'kitchen'].includes(roleFrom(request))) return send(response, 403, { error: 'Seule la cuisine peut traiter cette commande' })
+      if (nextStatus === 'served' && !['manager', 'server'].includes(roleFrom(request))) return send(response, 403, { error: 'Seule la salle peut marquer une commande servie' })
       order.status = nextStatus
       if (nextStatus === 'paid') order.paymentMethod = input.paymentMethod === 'cash' ? 'cash' : 'card'
       await saveDatabase(database, restaurantId)

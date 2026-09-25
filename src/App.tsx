@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import './App.css'
 import './modules.css'
-import { createMenuItem, createOrder, createReservation, getDashboard, getInventory, getMenu, getSession, login, logout, openCashDrawer, updateInventory, updateOrderStatus, type Dashboard, type InventoryItem, type MenuItem, type OrderLine, type RestaurantTable, type Role, type SessionUser } from './api'
+import { createMenuItem, createOrder, createReservation, createStockWithdrawal, getDashboard, getInventory, getMenu, getSession, getStockWithdrawals, login, logout, openCashDrawer, updateInventory, updateOrderStatus, type Dashboard, type InventoryItem, type MenuItem, type OrderLine, type RestaurantTable, type Role, type SessionUser, type StockWithdrawal } from './api'
 
 type IconProps = { size?: number }
 type IconComponent = (props: IconProps) => React.ReactNode
@@ -32,13 +32,14 @@ function App() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [serverNotice, setServerNotice] = useState('')
   const [menu, setMenu] = useState<MenuItem[]>([])
+  const [stockWithdrawals, setStockWithdrawals] = useState<StockWithdrawal[]>([])
   const previousOrderStatuses = useRef<Record<string, string>>({})
   const orderSubmissionInFlight = useRef(false)
 
   useEffect(() => {
     const token = localStorage.getItem('restaurant-token')
     const restore = token ? getSession().then(({ user }) => user) : login('manager', '1234').then(({ token: freshToken, user }) => { localStorage.setItem('restaurant-token', freshToken); return user })
-    restore.then((user) => { setSessionUser(user); setRole(user.role); setActiveNav(user.role === 'kitchen' ? 'Cuisine' : user.role === 'cashier' ? 'Caisse & paiements' : user.role === 'server' ? 'Prise de commande' : 'Vue d’ensemble'); return Promise.all([getDashboard(), getInventory(), getMenu()]) }).then(([data, stock, dishes]) => { previousOrderStatuses.current = Object.fromEntries(data.orders.map((order) => [order.id, order.status])); setDashboard(data); setInventory(stock); setMenu(dishes) }).catch(() => { localStorage.removeItem('restaurant-token'); setApiError('API indisponible : lancez npm run api') }).finally(() => setSessionReady(true))
+    restore.then((user) => { setSessionUser(user); setRole(user.role); setActiveNav(user.role === 'kitchen' ? 'Cuisine' : user.role === 'cashier' ? 'Caisse & paiements' : user.role === 'server' ? 'Prise de commande' : 'Vue d’ensemble'); return Promise.all([getDashboard(), getInventory(), getMenu(), getStockWithdrawals()]) }).then(([data, stock, dishes, withdrawals]) => { previousOrderStatuses.current = Object.fromEntries(data.orders.map((order) => [order.id, order.status])); setDashboard(data); setInventory(stock); setMenu(dishes); setStockWithdrawals(withdrawals) }).catch(() => { localStorage.removeItem('restaurant-token'); setApiError('API indisponible : lancez npm run api') }).finally(() => setSessionReady(true))
   }, [])
   useEffect(() => {
     if (!sessionUser) return
@@ -86,6 +87,17 @@ function App() {
   const handleStock = async (id: string, quantity: number) => {
     try { const updated = await updateInventory(id, quantity); setInventory((current) => current.map((item) => item.id === id ? updated : item)) } catch { setApiError('Impossible de mettre à jour le stock.') }
   }
+  const handleStockWithdrawal = async (items: { inventoryItemId: string; quantity: number }[], note: string) => {
+    try {
+      const result = await createStockWithdrawal(items, note)
+      setInventory(result.inventory)
+      setStockWithdrawals((current) => [result.withdrawal, ...current])
+      setServerNotice(`Bon de sortie ${result.withdrawal.id} enregistré; stock déduit.`)
+      return true
+    } catch { setApiError('Impossible d’enregistrer le bon de sortie.')
+      return false
+    }
+  }
   const handleMenuItem = async (item: { name: string; price: number; image: string }) => { try { const dish = await createMenuItem(item); setMenu((current) => [...current, dish]) } catch { setApiError('Impossible d’ajouter ce plat au menu.') } }
   const switchRole = async (nextRole: Role) => {
     const pins: Record<Role, string> = { manager: '1234', server: '2222', kitchen: '3333', cashier: '4444' }
@@ -95,11 +107,12 @@ function App() {
 
   const renderView = () => {
     if (activeNav === 'Vue d’ensemble') return <DashboardView dashboard={dashboard} tables={tables} tableZones={tableZones} reservations={reservations} onNavigate={setActiveNav} onTableSelect={(id) => { setSelectedTable(id); setActiveNav('Prise de commande') }} />
-    if (activeNav === 'Plan de salle') return <ModuleView title="Plan de salle" description="Visualisez l’occupation et attribuez les tables." icon="⌖"><FloorPlan tables={tables} tableZones={tableZones} onSelect={(id) => { setSelectedTable(id); setActiveNav('Prise de commande') }} /></ModuleView>
+    if (activeNav === 'Plan de salle') return <ModuleView title="Plan de salle" description="Visualisez l’occupation et attribuez les tables." icon="⌖"><FloorPlan tables={tables} tableZones={tableZones} onSelect={(id) => { setSelectedTable(id); setActiveNav(role === 'cashier' ? 'Caisse & paiements' : 'Prise de commande') }} /></ModuleView>
     if (activeNav === 'Réservations') return <ModuleView title="Réservations" description="Gérez les arrivées et les couverts du service." icon="▦"><ReservationModule reservations={reservations} onCreate={() => setShowAdd(true)} /></ModuleView>
-    if (activeNav === 'Cuisine') return <ModuleView title="Cuisine" description="Suivez les commandes envoyées au passe." icon="♨"><KitchenModule orders={dashboard?.orders || []} onStatus={handleOrderStatus} /></ModuleView>
-    if (activeNav === 'Caisse & paiements') return <ModuleView title="Caisse & paiements" description="Contrôlez les additions et les règlements du service." icon="€"><CashierModule orders={dashboard?.orders || []} onPay={handleOrderStatus} onOpenDrawer={handleCashDrawer} /></ModuleView>
-    if (activeNav === 'Prise de commande') return <ModuleView title="Prise de commande" description={selectedTable ? `Table ${selectedTable} sélectionnée` : 'Choisissez une table avant de commander.'} icon="☷"><OrderModuleForm key={`${selectedTable}-${dashboard?.orders[0]?.id || 'empty'}`} menu={menu} selectedTable={selectedTable} onNavigate={setActiveNav} onCreate={handleOrder} /></ModuleView>
+    if (activeNav === 'Cuisine') return <ModuleView title="Cuisine" description="Réception, préparation et commandes prêtes à envoyer en salle." icon="♨"><KitchenModule orders={(dashboard?.orders || []).filter((order) => order.status !== 'served' && order.status !== 'paid')} onStatus={handleOrderStatus} /></ModuleView>
+    if (activeNav === 'Caisse & paiements') return <ModuleView title="Caisse & paiements" description="Sélectionnez une table, vérifiez l’addition et encaissez." icon="€"><CashierWorkspace orders={dashboard?.orders || []} tables={tables} tableZones={tableZones} selectedTable={selectedTable} onSelectTable={setSelectedTable} onClearTable={() => setSelectedTable('')} onPay={handleOrderStatus} onOpenDrawer={handleCashDrawer} /></ModuleView>
+    if (activeNav === 'Prise de commande') return <ModuleView title="Prise de commande" description={selectedTable ? `Table ${selectedTable} sélectionnée` : 'Choisissez une table avant de commander.'} icon="☷"><OrderModuleForm key={`${selectedTable}-${dashboard?.orders[0]?.id || 'empty'}`} menu={menu} selectedTable={selectedTable} onNavigate={setActiveNav} onCreate={handleOrder} /><ServerOrdersModule orders={dashboard?.orders || []} onStatus={handleOrderStatus} /></ModuleView>
+    if (activeNav === 'Approvisionnement' && role === 'kitchen') return <ModuleView title="Sorties vers la cuisine" description="Enregistrez les ingrédients consommés; le stock sera déduit." icon="□"><KitchenStockModule items={inventory} onSubmit={handleStockWithdrawal} withdrawals={stockWithdrawals} /></ModuleView>
     if (activeNav === 'Approvisionnement') return <ModuleView title="Approvisionnement" description="Surveillez les seuils et mettez à jour les quantités." icon="□"><InventoryModule items={inventory} onUpdate={handleStock} /></ModuleView>
     if (activeNav === 'Finances') return <ModuleView title="Finances" description="Suivez les encaissements et le chiffre d’affaires du service." icon="€"><FinanceModule orders={dashboard?.orders || []} /></ModuleView>
       if (activeNav === 'Menu & plats') return <ModuleView title="Menu & plats" description="Créez vos plats, leurs prix et leurs photos." icon="♧"><MenuModule items={menu} onCreate={handleMenuItem} /></ModuleView>
@@ -113,9 +126,10 @@ function App() {
       <div className="brand"><span className="brand-mark"><Utensils size={18} /></span><span>Service<span className="brand-accent">Pilot</span></span></div>
       <div className="workspace-switcher"><span className="avatar">LM</span><span><strong>Le Mijoté</strong><small>Restaurant · Paris 11e</small></span><ChevronDown size={15} /></div>
       <p className="nav-caption">PILOTAGE</p>
-      <nav>{navItems.filter(({ label }) => role === 'manager' || (role === 'server' && ['Prise de commande', 'Plan de salle', 'Réservations'].includes(label)) || (role === 'kitchen' && label === 'Cuisine') || (role === 'cashier' && label === 'Caisse & paiements')).map(({ label, icon: Icon, badge }) => <button key={label} className={`nav-item ${activeNav === label ? 'active' : ''}`} onClick={() => { setActiveNav(label); setMobileNavOpen(false) }}><Icon size={18} /><span>{label}</span>{badge && <em>{badge}</em>}</button>)}</nav>
-      <p className="nav-caption bottom-caption">ADMINISTRATION</p>
+      <nav>{navItems.filter(({ label }) => role === 'manager' || (role === 'server' && ['Prise de commande', 'Plan de salle', 'Réservations'].includes(label)) || (role === 'kitchen' && label === 'Cuisine') || (role === 'cashier' && ['Plan de salle', 'Caisse & paiements'].includes(label))).map(({ label, icon: Icon, badge }) => <button key={label} className={`nav-item ${activeNav === label ? 'active' : ''}`} onClick={() => { setActiveNav(label); setMobileNavOpen(false) }}><Icon size={18} /><span>{label}</span>{badge && <em>{badge}</em>}</button>)}</nav>
+      <p className="nav-caption bottom-caption">{role === 'kitchen' ? 'STOCK CUISINE' : 'ADMINISTRATION'}</p>
       {role === 'manager' && <><button className="nav-item" onClick={() => { setActiveNav('Approvisionnement'); setMobileNavOpen(false) }}><Package size={18} /><span>Approvisionnement</span></button><button className="nav-item" onClick={() => { setActiveNav('Finances'); setMobileNavOpen(false) }}><CircleDollarSign size={18} /><span>Finances</span></button><button className="nav-item" onClick={() => { setActiveNav('Paramètres'); setMobileNavOpen(false) }}><Settings size={18} /><span>Paramètres</span></button></>}
+      {role === 'kitchen' && <button className={`nav-item ${activeNav === 'Approvisionnement' ? 'active' : ''}`} onClick={() => { setActiveNav('Approvisionnement'); setMobileNavOpen(false) }}><Package size={18} /><span>Bons de sortie</span></button>}
       <div className="sidebar-footer"><div className="support-icon"><Bell size={17} /></div><div><strong>Besoin d’aide ?</strong><small>Centre de support</small></div><ArrowUpRight size={15} /></div>
     </aside>
     <main className="main-content">
@@ -146,4 +160,27 @@ function FinanceModule({ orders }: { orders: Dashboard['orders'] }) { const reve
 function SettingsModule({ user, onLogout }: { user: SessionUser | null; onLogout: () => void }) { return <section className="panel settings-module"><div><strong>Session active</strong><span>{user?.name} · {user?.role}</span></div><button className="action-button" onClick={onLogout}>Fermer la session</button></section> }
 function LoginScreen({ onLogin }: { onLogin: (user: SessionUser, token: string) => void }) { const [role, setRole] = useState<Role>('manager'); const [pin, setPin] = useState(''); const [error, setError] = useState(''); const [loading, setLoading] = useState(false); const submit = async () => { setLoading(true); setError(''); try { const session = await login(role, pin); onLogin(session.user, session.token) } catch { setError('Code incorrect pour ce rôle') } finally { setLoading(false) } }; return <div className="login-screen"><div className="login-card"><div className="brand login-brand"><span className="brand-mark"><Utensils size={18} /></span><span>Service<span className="brand-accent">Pilot</span></span></div><p className="eyebrow">ACCÈS ÉQUIPE</p><h1>Ouvrir une session</h1><p className="login-subtitle">Choisissez votre poste et saisissez votre code.</p><label>Poste<select value={role} onChange={(event) => setRole(event.target.value as Role)}><option value="manager">Gérante</option><option value="server">Serveur</option><option value="kitchen">Cuisine</option><option value="cashier">Caissier</option></select></label><label>Code d’accès<input type="password" inputMode="numeric" value={pin} onChange={(event) => setPin(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && submit()} placeholder="••••" /></label>{error && <p className="login-error">{error}</p>}<button className="primary-button login-submit" disabled={!pin || loading} onClick={submit}>{loading ? 'Connexion...' : 'Ouvrir la session'}</button></div></div> }
 function ReservationModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (data: { name: string; time: string; people: number }) => void }) { const [name, setName] = useState(''); const [time, setTime] = useState('19:30'); const [people, setPeople] = useState(4); return <div className="modal-backdrop" onClick={onClose}><div className="modal" onClick={(event) => event.stopPropagation()}><div className="modal-heading"><div><p className="eyebrow">NOUVEAU RENDEZ-VOUS</p><h2>Ajouter une réservation</h2></div><button onClick={onClose} aria-label="Fermer">×</button></div><label>Nom du client<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Ex. Camille Durand" /></label><div className="modal-fields"><label>Date<input type="date" defaultValue="2026-09-24" /></label><label>Heure<input type="time" value={time} onChange={(event) => setTime(event.target.value)} /></label></div><label>Nombre de personnes<select value={people} onChange={(event) => setPeople(Number(event.target.value))}><option value="2">2 personnes</option><option value="4">4 personnes</option><option value="6">6 personnes</option><option value="8">8 personnes</option></select></label><button className="primary-button modal-submit" disabled={!name.trim()} onClick={() => onSubmit({ name, time, people })}>Créer la réservation <ArrowUpRight size={16} /></button></div></div> }
+function ServerOrdersModule({ orders, onStatus }: { orders: Dashboard['orders']; onStatus: (id: string, status: string) => void }) {
+  const active = orders.filter((order) => order.status === 'ready' || order.status === 'served')
+  return <section className="panel module-list server-orders"><div className="module-list-heading"><strong>Commandes à servir</strong><span>{active.filter((order) => order.status === 'ready').length} prête(s)</span></div>{active.length ? active.map((order) => <div className="module-row" key={order.id}><span className="order-number">#{order.id}</span><div><strong>Table {order.table}</strong><small>{order.items} articles · {order.lines?.map((line) => `${line.quantity}× ${line.name}`).join(' · ')}</small></div>{order.status === 'ready' ? <button className="action-button" onClick={() => onStatus(order.id, 'served')}>Livrée à table</button> : <span className="status-pill">Servie</span>}</div>) : <p className="empty-list">Aucune commande prête pour le moment.</p>}</section>
+}
+
+function CashierWorkspace({ orders, tables, tableZones, selectedTable, onSelectTable, onClearTable, onPay, onOpenDrawer }: { orders: Dashboard['orders']; tables: RestaurantTable[]; tableZones: string[]; selectedTable: string; onSelectTable: (id: string) => void; onClearTable: () => void; onPay: (id: string, status: string, paymentMethod?: 'cash' | 'card') => void; onOpenDrawer: () => void }) {
+  const tableOrders = selectedTable ? orders.filter((order) => order.table === selectedTable && order.status !== 'paid') : orders
+  return <><section className="panel cashier-floor"><div className="panel-heading"><div><h2>Plan de salle</h2><p>{selectedTable ? `Additions de la table ${selectedTable}` : 'Choisissez une table pour filtrer les additions.'}</p></div>{selectedTable && <button className="text-button" onClick={onClearTable}>Toutes les tables</button>}</div><FloorPlan tables={tables} tableZones={tableZones} onSelect={onSelectTable} /></section><CashierModule orders={tableOrders} onPay={onPay} onOpenDrawer={onOpenDrawer} /></>
+}
+
+function KitchenStockModule({ items, withdrawals, onSubmit }: { items: InventoryItem[]; withdrawals: StockWithdrawal[]; onSubmit: (items: { inventoryItemId: string; quantity: number }[], note: string) => Promise<boolean> }) {
+  const [quantities, setQuantities] = useState<Record<string, number>>({})
+  const [note, setNote] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const lines = Object.entries(quantities).filter(([, quantity]) => quantity > 0).map(([inventoryItemId, quantity]) => ({ inventoryItemId, quantity }))
+  const submit = async () => {
+    if (!lines.length || submitting) return
+    setSubmitting(true)
+    try { if (await onSubmit(lines, note)) { setQuantities({}); setNote('') } } finally { setSubmitting(false) }
+  }
+  return <><section className="panel module-list"><div className="module-list-heading"><strong>Bon de sortie vers la cuisine</strong><span>Le stock sera déduit à la validation</span></div>{items.map((item) => <div className="module-row" key={item.id}><div><strong>{item.name}</strong><small>Disponible : {item.quantity} {item.unit}</small></div><input className="quantity-input" type="number" min="0" max={item.quantity} step="0.001" value={quantities[item.id] || ''} aria-label={`Sortie ${item.name}`} onChange={(event) => setQuantities((current) => ({ ...current, [item.id]: Number(event.target.value) }))} /><span className="stock-unit">{item.unit}</span></div>)}<div className="withdrawal-note"><label>Motif / remarque<input value={note} onChange={(event) => setNote(event.target.value)} placeholder="Ex. préparation du service du midi" /></label><button className="primary-button" disabled={!lines.length || submitting} onClick={submit}>{submitting ? 'Enregistrement...' : 'Valider le bon de sortie'}</button></div></section><section className="panel module-list withdrawal-history"><div className="module-list-heading"><strong>Dernières sorties</strong><span>{withdrawals.length}</span></div>{withdrawals.slice(0, 5).map((withdrawal) => <div className="module-row" key={withdrawal.id}><time>{new Date(withdrawal.createdAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</time><div><strong>{withdrawal.reason}</strong><small>{withdrawal.items.map((item) => `${item.quantity} ${item.unit} ${item.name}`).join(' · ')}{withdrawal.note ? ` · ${withdrawal.note}` : ''}</small></div></div>)}</section></>
+}
+
 export default App
