@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 
 const root = dirname(fileURLToPath(import.meta.url))
 const databasePath = resolve(root, 'db/restaurant.json')
-const port = Number(process.env.API_PORT || 8787)
+const port = Number(process.env.PORT || process.env.API_PORT || 8787)
 const sessionDurationMs = 8 * 60 * 60 * 1000
 const sessions = new Map()
 
@@ -21,6 +21,21 @@ async function saveDatabase(database) {
 function send(response, status, payload) {
   response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': 'http://localhost:5173', 'Access-Control-Allow-Headers': 'Content-Type, Authorization', 'Access-Control-Allow-Methods': 'GET,POST,PATCH,OPTIONS' })
   response.end(JSON.stringify(payload))
+}
+
+async function serveFrontend(request, response, pathname) {
+  const requestedPath = pathname === '/' ? '/index.html' : pathname
+  const filePath = resolve(root, 'dist', `.${requestedPath}`)
+  try {
+    const content = await readFile(filePath)
+    const contentType = filePath.endsWith('.html') ? 'text/html; charset=utf-8' : filePath.endsWith('.js') ? 'text/javascript; charset=utf-8' : filePath.endsWith('.css') ? 'text/css; charset=utf-8' : 'application/octet-stream'
+    response.writeHead(200, { 'Content-Type': contentType })
+    response.end(content)
+  } catch {
+    const app = await readFile(resolve(root, 'dist/index.html'))
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+    response.end(app)
+  }
 }
 
 function sessionFrom(request) {
@@ -109,6 +124,7 @@ const server = createServer(async (request, response) => {
       await saveDatabase(database)
       return send(response, 200, order)
     }
+    if (request.method === 'GET') return serveFrontend(request, response, url.pathname)
     return send(response, 404, { error: 'Route introuvable' })
   } catch (error) {
     console.error(error)

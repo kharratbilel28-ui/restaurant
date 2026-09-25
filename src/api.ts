@@ -6,7 +6,7 @@ export type Role = 'manager' | 'server' | 'kitchen' | 'cashier'
 export type SessionUser = { id: string; name: string; role: Role }
 export type Session = { token: string; expiresAt: number; user: SessionUser }
 
-const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8787/api'
+const apiUrl = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '/api' : 'http://localhost:8787/api')
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const token = localStorage.getItem('restaurant-token')
