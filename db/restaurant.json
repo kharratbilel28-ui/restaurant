@@ -1,0 +1,108 @@
+{
+  "reservations": [
+    {
+      "id": "res-1",
+      "time": "19:30",
+      "name": "Camille Durand",
+      "people": 4,
+      "table": "T03",
+      "status": "confirmed"
+    },
+    {
+      "id": "res-2",
+      "time": "19:45",
+      "name": "Thomas Bernard",
+      "people": 2,
+      "table": "T08",
+      "status": "confirmed"
+    },
+    {
+      "id": "res-3",
+      "time": "20:00",
+      "name": "Sarah & Marc",
+      "people": 6,
+      "table": "T04",
+      "status": "confirmed"
+    }
+  ],
+  "users": [
+    { "id": "user-manager", "name": "Louise Martin", "role": "manager", "pin": "1234" },
+    { "id": "user-server", "name": "Équipe salle", "role": "server", "pin": "2222" },
+    { "id": "user-kitchen", "name": "Équipe cuisine", "role": "kitchen", "pin": "3333" },
+    { "id": "user-cashier", "name": "Caisse", "role": "cashier", "pin": "4444" }
+  ],
+  "orders": [
+    {
+      "id": "1048",
+      "table": "T07",
+      "items": 3,
+      "amount": 86,
+      "status": "kitchen",
+      "createdAt": "2026-09-24T19:18:00+02:00"
+    },
+    {
+      "id": "1045",
+      "table": "T02",
+      "items": 5,
+      "amount": 142.5,
+      "status": "paid",
+      "createdAt": "2026-09-24T19:12:00+02:00"
+    }
+  ],
+  "tables": [
+    {
+      "id": "T01",
+      "seats": 2,
+      "status": "free",
+      "zone": "Terrasse"
+    },
+    {
+      "id": "T02",
+      "seats": 4,
+      "status": "occupied",
+      "zone": "Terrasse"
+    },
+    {
+      "id": "T03",
+      "seats": 4,
+      "status": "reserved",
+      "zone": "Terrasse"
+    },
+    {
+      "id": "T04",
+      "seats": 6,
+      "status": "free",
+      "zone": "Terrasse"
+    },
+    {
+      "id": "T05",
+      "seats": 2,
+      "status": "occupied",
+      "zone": "Salle principale"
+    },
+    {
+      "id": "T06",
+      "seats": 2,
+      "status": "free",
+      "zone": "Salle principale"
+    },
+    {
+      "id": "T07",
+      "seats": 4,
+      "status": "occupied",
+      "zone": "Salle principale"
+    },
+    {
+      "id": "T08",
+      "seats": 4,
+      "status": "reserved",
+      "zone": "Salle principale"
+    },
+    {
+      "id": "T09",
+      "seats": 6,
+      "status": "free",
+      "zone": "Salle principale"
+    }
+  ]
+}
