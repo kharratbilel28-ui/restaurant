@@ -1,7 +1,7 @@
 export type Reservation = { id: string; time: string; name: string; people: number; table: string; status: string }
 export type RestaurantTable = { id: string; seats: number; status: 'free' | 'occupied' | 'reserved'; zone: string }
 export type OrderLine = { name: string; quantity: number; price: number }
-export type Order = { id: string; table: string; items: number; amount: number; status: 'received' | 'preparing' | 'ready' | 'paid'; note: string; lines: OrderLine[]; createdAt: string }
+export type Order = { id: string; table: string; items: number; amount: number; status: 'received' | 'preparing' | 'ready' | 'paid'; note?: string; lines?: OrderLine[]; paymentMethod?: 'cash' | 'card'; createdAt: string }
 export type InventoryItem = { id: string; name: string; quantity: number; unit: string; minimum: number; supplier: string }
 export type MenuItem = { id: string; name: string; price: number; image: string; active: boolean }
 export type Dashboard = { reservations: Reservation[]; orders: Order[]; tables: RestaurantTable[]; stats: { reservations: number; covers: number; revenue: number; averageDuration: string } }
@@ -27,7 +27,8 @@ export const login = (role: Role, pin: string) => request<Session>('/auth/login'
 export const getSession = () => request<Omit<Session, 'token'>>('/auth/me')
 export const logout = () => request<void>('/auth/logout', { method: 'POST' })
 export const createReservation = (reservation: { name: string; time: string; people: number; table?: string }) => request<Reservation>('/reservations', { method: 'POST', body: JSON.stringify(reservation) })
-export const updateOrderStatus = (id: string, status: string) => request<Order>(`/orders/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) })
+export const updateOrderStatus = (id: string, status: string, paymentMethod?: 'cash' | 'card') => request<Order>(`/orders/${id}`, { method: 'PATCH', body: JSON.stringify({ status, paymentMethod }) })
+export const openCashDrawer = () => request<{ opened: boolean }>('/hardware/cash-drawer', { method: 'POST' })
 export const createOrder = (order: { table: string; items: OrderLine[]; amount: number; note: string }) => request<Order>('/orders', { method: 'POST', body: JSON.stringify(order) })
 export const getInventory = () => request<InventoryItem[]>('/inventory')
 export const updateInventory = (id: string, quantity: number) => request<InventoryItem>(`/inventory/${id}`, { method: 'PATCH', body: JSON.stringify({ quantity }) })

@@ -123,6 +123,10 @@ const server = createServer(async (request, response) => {
       await saveDatabase(database)
       return send(response, 201, dish)
     }
+    if (url.pathname === '/api/hardware/cash-drawer' && request.method === 'POST') {
+      if (!['manager', 'cashier'].includes(roleFrom(request))) return send(response, 403, { error: 'Droits insuffisants' })
+      return send(response, 200, { opened: true, message: 'Commande d’ouverture envoyée au tiroir-caisse' })
+    }
     if (url.pathname.startsWith('/api/inventory/') && request.method === 'PATCH') {
       if (!['manager', 'kitchen'].includes(roleFrom(request))) return send(response, 403, { error: 'Droits insuffisants' })
       const item = database.inventory.find((entry) => entry.id === url.pathname.split('/').pop())
@@ -164,6 +168,7 @@ const server = createServer(async (request, response) => {
       if (nextStatus === 'paid' && !['manager', 'cashier'].includes(roleFrom(request))) return send(response, 403, { error: 'Seule la caisse peut encaisser' })
       if (['preparing', 'ready'].includes(nextStatus) && !['manager', 'kitchen'].includes(roleFrom(request))) return send(response, 403, { error: 'Seule la cuisine peut traiter cette commande' })
       order.status = nextStatus
+      if (nextStatus === 'paid') order.paymentMethod = input.paymentMethod === 'cash' ? 'cash' : 'card'
       await saveDatabase(database)
       return send(response, 200, order)
     }
