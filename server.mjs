@@ -17,6 +17,11 @@ async function readDatabase() {
     { id: 'inv-2', name: 'Filet de bar', quantity: 14, unit: 'pieces', minimum: 8, supplier: 'La Maree' },
     { id: 'inv-3', name: 'Beurre doux', quantity: 3, unit: 'kg', minimum: 5, supplier: 'Transgourmet' }
   ]
+  database.menu ||= [
+    { id: 'dish-1', name: 'Plat du jour', price: 18, image: 'https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=400&q=80', active: true },
+    { id: 'dish-2', name: 'Filet de bar', price: 24, image: 'https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?auto=format&fit=crop&w=400&q=80', active: true },
+    { id: 'dish-3', name: 'Dessert maison', price: 9, image: 'https://images.unsplash.com/photo-1551024506-0bccd828d307?auto=format&fit=crop&w=400&q=80', active: true }
+  ]
   return database
 }
 
@@ -105,6 +110,19 @@ const server = createServer(async (request, response) => {
       if (!requireSession(request, response)) return
       return send(response, 200, database.inventory)
     }
+    if (url.pathname === '/api/menu' && request.method === 'GET') {
+      if (!requireSession(request, response)) return
+      return send(response, 200, database.menu)
+    }
+    if (url.pathname === '/api/menu' && request.method === 'POST') {
+      if (roleFrom(request) !== 'manager') return send(response, 403, { error: 'Seule la gérante peut modifier le menu' })
+      const input = await body(request)
+      if (!input.name || !input.price) return send(response, 400, { error: 'Nom et prix obligatoires' })
+      const dish = { id: `dish-${Date.now()}`, name: input.name, price: Number(input.price), image: input.image || '', active: true }
+      database.menu.push(dish)
+      await saveDatabase(database)
+      return send(response, 201, dish)
+    }
     if (url.pathname.startsWith('/api/inventory/') && request.method === 'PATCH') {
       if (!['manager', 'kitchen'].includes(roleFrom(request))) return send(response, 403, { error: 'Droits insuffisants' })
       const item = database.inventory.find((entry) => entry.id === url.pathname.split('/').pop())
@@ -127,7 +145,8 @@ const server = createServer(async (request, response) => {
       if (!['manager', 'server'].includes(roleFrom(request))) return send(response, 403, { error: 'Droits insuffisants' })
       const input = await body(request)
       if (!input.table || !Array.isArray(input.items) || input.items.length === 0) return send(response, 400, { error: 'table et items sont obligatoires' })
-      const order = { id: String(1050 + database.orders.length), table: input.table, items: input.items.length, amount: Number(input.amount || 0), status: 'kitchen', createdAt: new Date().toISOString() }
+      const lines = input.items.map((item) => ({ name: item.name, quantity: Number(item.quantity), price: Number(item.price) }))
+      const order = { id: String(1050 + database.orders.length), table: input.table, items: lines.reduce((sum, item) => sum + item.quantity, 0), amount: Number(input.amount || 0), status: 'received', note: input.note || '', lines, createdAt: new Date().toISOString() }
       database.orders.unshift(order)
       await saveDatabase(database)
       return send(response, 201, order)
@@ -139,7 +158,12 @@ const server = createServer(async (request, response) => {
       const order = database.orders.find((item) => item.id === id)
       if (!order) return send(response, 404, { error: 'Commande introuvable' })
       const input = await body(request)
-      order.status = input.status || order.status
+      const nextStatus = input.status
+      const allowedStatuses = ['received', 'preparing', 'ready', 'paid']
+      if (!allowedStatuses.includes(nextStatus)) return send(response, 400, { error: 'Statut de commande invalide' })
+      if (nextStatus === 'paid' && !['manager', 'cashier'].includes(roleFrom(request))) return send(response, 403, { error: 'Seule la caisse peut encaisser' })
+      if (['preparing', 'ready'].includes(nextStatus) && !['manager', 'kitchen'].includes(roleFrom(request))) return send(response, 403, { error: 'Seule la cuisine peut traiter cette commande' })
+      order.status = nextStatus
       await saveDatabase(database)
       return send(response, 200, order)
     }
