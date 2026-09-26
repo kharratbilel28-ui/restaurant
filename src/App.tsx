@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import './App.css'
 import './modules.css'
+import './restaurant-display.css'
 import { PlatformOwnerDashboard } from './PlatformOwnerDashboard'
 import { createDiningTable, createInvoice, createMenuItem, createOrder, createProfile, createReservation, createStockReceiptDraft, createStockWithdrawal, createPlatformRestaurant, createSubscriptionPlan, getDashboard, getFloorPlan, getHealth, getInventory, getMenu, getPlatformOverview, getPlatformSession, getProfiles, getRestaurantContext, getSession, getStockReceipts, getStockWithdrawals, login, loginPlatform, loginRestaurant, logout, logoutPlatform, logoutRestaurant, openCashDrawer, reviewStockReceipt, saveFloorPlan, sendInvoiceEmail, updateDiningTable, updateInventory, updateMenuItem, updateOrderStatus, updateRestaurantSubscription, type Dashboard, type FloorPlanConfig, type InventoryItem, type Invoice, type ManagedRestaurant, type MenuItem, type Order, type OrderLine, type PlatformOverview, type RestaurantContext, type RestaurantTable, type Role, type SessionUser, type StockReceipt, type StockReceiptLine, type StockWithdrawal, type TeamProfile } from './api'
 import type { InvoiceAnalysis } from './invoiceOcr'
 
 type IconProps = { size?: number }
 type IconComponent = (props: IconProps) => React.ReactNode
+type DisplayMode = 'terrace' | 'low-light'
 const makeIcon = (symbol: string): IconComponent => ({ size = 18 }) => <span className="local-icon" style={{ fontSize: size - 2 }}>{symbol}</span>
 const Archive = makeIcon('▣'), ArrowUpRight = makeIcon('↗'), Bell = makeIcon('🔔'), CalendarDays = makeIcon('▦')
 const ChevronDown = makeIcon('⌄'), ChefHat = makeIcon('♨'), CircleDollarSign = makeIcon('€'), ClipboardList = makeIcon('☷')
@@ -33,6 +35,7 @@ function App() {
   const [profiles, setProfiles] = useState<TeamProfile[]>([])
   const [platformOwner, setPlatformOwner] = useState(false)
   const [platformLoginMode, setPlatformLoginMode] = useState(false)
+  const [displayMode, setDisplayMode] = useState<DisplayMode>(() => localStorage.getItem('restaurant-display-mode') === 'low-light' ? 'low-light' : 'terrace')
   const [sessionReady, setSessionReady] = useState(false)
   const [inventory, setInventory] = useState<InventoryItem[]>([])
   const [selectedTable, setSelectedTable] = useState('')
@@ -82,6 +85,10 @@ function App() {
     }).finally(() => setSessionReady(true))
   }, [])
   useEffect(() => { getHealth().then((health) => setStorageMode(health.storage)).catch(() => setStorageMode('unknown')) }, [])
+  useEffect(() => {
+    document.documentElement.dataset.displayMode = displayMode
+    localStorage.setItem('restaurant-display-mode', displayMode)
+  }, [displayMode])
   useEffect(() => {
     if (!sessionUser) return
     const poll = window.setInterval(() => { getDashboard().then((next) => { const ready = next.orders.find((order) => order.status === 'ready' && previousOrderStatuses.current[order.id] !== 'ready'); if (ready && (role === 'server' || role === 'manager')) { setServerNotice(`La commande #${ready.id} de la table ${ready.table} est prête.`); setNotifications((current) => current.some((item) => item.id === `order-ready-${ready.id}`) ? current : [{ id: `order-ready-${ready.id}`, title: 'Commande prête', message: `La commande #${ready.id} de la table ${ready.table} peut être servie.`, createdAt: new Date().toISOString(), target: 'Prise de commande', read: false }, ...current]) } previousOrderStatuses.current = Object.fromEntries(next.orders.map((order) => [order.id, order.status])); setDashboard(next) }).catch(() => undefined) }, 8000)
@@ -258,6 +265,7 @@ function App() {
       <div className="sidebar-footer"><div className="support-icon"><Bell size={17} /></div><div><strong>Besoin d’aide ?</strong><small>Centre de support</small></div><ArrowUpRight size={15} /></div>
     </aside>
     <main className="main-content">
+      <div className="display-mode-control" role="group" aria-label="Mode d’affichage"><span>Affichage</span><button className={displayMode === 'terrace' ? 'selected' : ''} aria-pressed={displayMode === 'terrace'} onClick={() => setDisplayMode('terrace')}>Terrasse</button><button className={displayMode === 'low-light' ? 'selected' : ''} aria-pressed={displayMode === 'low-light'} onClick={() => setDisplayMode('low-light')}>Salle sombre</button></div>
       <header className="topbar"><button className="mobile-menu-button" aria-label="Ouvrir le menu" onClick={() => setMobileNavOpen(!mobileNavOpen)}>☰</button><div className="breadcrumb"><button className="home-button" onClick={() => setActiveNav(role === 'manager' ? 'Vue d’ensemble' : role === 'kitchen' ? 'Cuisine' : role === 'cashier' ? 'Caisse & paiements' : 'Prise de commande')}>Accueil</button><span className="dot">·</span><span>Bonjour {sessionUser.name}</span><span className="dot">·</span><span className="muted">Jeudi 24 septembre 2026</span></div><div className="top-actions"><div className="notification-wrap"><button className="icon-button notification" aria-label="Notifications" aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}><Bell size={19} />{notifications.some((item) => !item.read) && <i />}</button>{notificationsOpen && <section className="notification-panel" aria-label="Centre de notifications"><header className="notification-panel-header"><div><strong>Notifications</strong><span>{notifications.filter((item) => !item.read).length} non lue(s)</span></div><button onClick={() => setNotifications((items) => items.map((item) => ({ ...item, read: true })))}>Tout lire</button></header><div className="notification-list">{notifications.length ? notifications.map((item) => <button key={item.id} className={`notification-item ${item.read ? 'read' : 'unread'}`} onClick={() => { setNotifications((items) => items.map((current) => current.id === item.id ? { ...current, read: true } : current)); setActiveNav(item.target); setNotificationsOpen(false) }}><span className="notification-avatar"><Bell size={15} /></span><span className="notification-copy"><strong>{item.title}</strong><span>{item.message}</span><time>{formatNotificationTime(item.createdAt)}</time></span>{!item.read && <i className="unread-dot" />}</button>) : <p className="notification-empty">Vous êtes à jour. Aucune notification.</p>}</div></section>}</div><div className="profile"><span className="avatar profile-avatar">{sessionUser.name.slice(0, 2).toUpperCase()}</span><span><strong>{sessionUser.name}</strong><small>{role === 'manager' ? 'Gérante' : role === 'server' ? 'Serveur' : role === 'kitchen' ? 'Cuisine' : 'Caissier'}</small></span></div><button className="logout-button" onClick={handleLogout}>Déconnexion</button></div></header>
       {apiError && <div className="api-error">{apiError}</div>}
       {serverNotice && <div className="server-notice"><Bell size={15} /><span>{serverNotice}</span><button onClick={() => setServerNotice('')} aria-label="Fermer">×</button></div>}

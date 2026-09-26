@@ -1,0 +1,97 @@
+:root[data-display-mode="terrace"] {
+  --ink: #171b18;
+  --muted: #4c554e;
+  --line: #c8d0c9;
+  --paper: #ffffff;
+  --cream: #f5f7f3;
+  --orange: #a9421e;
+  --orange-soft: #ffebe1;
+  --green: #17633b;
+  --green-soft: #e4f4e9;
+  --blue: #17547a;
+  --blue-soft: #e5f2f9;
+}
+
+:root[data-display-mode="low-light"] {
+  --ink: #f0f1eb;
+  --muted: #c2c5bc;
+  --line: #484e48;
+  --paper: #252a26;
+  --cream: #171b18;
+  --orange: #ffad7e;
+  --orange-soft: #493126;
+  --green: #9cdbad;
+  --green-soft: #253d2d;
+  --blue: #a9d5f0;
+  --blue-soft: #263b48;
+}
+
+.display-mode-control { display: flex; justify-content: flex-end; align-items: center; gap: 5px; margin: 9px 0; color: var(--muted); font-size: 10px; }
+.display-mode-control > span { margin-right: 3px; }
+.display-mode-control button { min-height: 36px; padding: 6px 11px; border: 1px solid var(--line); color: var(--ink); background: var(--paper); font-size: 10px; font-weight: 600; }
+.display-mode-control button:first-of-type { border-radius: 5px 0 0 5px; }
+.display-mode-control button:last-of-type { margin-left: -6px; border-radius: 0 5px 5px 0; }
+.display-mode-control button.selected { border-color: var(--orange); color: var(--orange); background: var(--orange-soft); }
+:root[data-display-mode] button, :root[data-display-mode] select, :root[data-display-mode] input { touch-action: manipulation; }
+:root[data-display-mode="terrace"] button, :root[data-display-mode="low-light"] button { min-height: 44px; }
+:root[data-display-mode="terrace"] .nav-item, :root[data-display-mode="low-light"] .nav-item { font-size: 13px; }
+:root[data-display-mode="terrace"] .module-row small, :root[data-display-mode="terrace"] .legend, :root[data-display-mode="terrace"] .menu-item small, :root[data-display-mode="terrace"] .status-pill,
+:root[data-display-mode="low-light"] .module-row small, :root[data-display-mode="low-light"] .legend, :root[data-display-mode="low-light"] .menu-item small, :root[data-display-mode="low-light"] .status-pill { font-size: 11px; }
+:root[data-display-mode="terrace"] .action-button, :root[data-display-mode="terrace"] .primary-button, :root[data-display-mode="terrace"] .payment-actions button,
+:root[data-display-mode="low-light"] .action-button, :root[data-display-mode="low-light"] .primary-button, :root[data-display-mode="low-light"] .payment-actions button { min-height: 44px; padding-inline: 12px; font-size: 12px; }
+:root[data-display-mode="terrace"] .floor-map-table, :root[data-display-mode="low-light"] .floor-map-table { min-width: 58px; min-height: 58px; }
+
+:root[data-display-mode="low-light"] body,
+:root[data-display-mode="low-light"] .login-screen,
+:root[data-display-mode="low-light"] .session-loading { color: var(--ink); background: var(--cream); }
+:root[data-display-mode="low-light"] .panel,
+:root[data-display-mode="low-light"] .stat-card,
+:root[data-display-mode="low-light"] .modal,
+:root[data-display-mode="low-light"] .login-card,
+:root[data-display-mode="low-light"] .menu-item,
+:root[data-display-mode="low-light"] .order-summary,
+:root[data-display-mode="low-light"] .menu-config-row,
+:root[data-display-mode="low-light"] .table-config-row,
+:root[data-display-mode="low-light"] .table-editor-fields input,
+:root[data-display-mode="low-light"] .table-editor-fields select,
+:root[data-display-mode="low-light"] .profile-editor-fields input,
+:root[data-display-mode="low-light"] .profile-editor-fields select,
+:root[data-display-mode="low-light"] .platform-form input,
+:root[data-display-mode="low-light"] .platform-form select,
+:root[data-display-mode="low-light"] .notification-panel { color: var(--ink); border-color: var(--line); background-color: var(--paper); }
+:root[data-display-mode="low-light"] .main-content,
+:root[data-display-mode="low-light"] .panel-heading,
+:root[data-display-mode="low-light"] .module-row,
+:root[data-display-mode="low-light"] .activity-row,
+:root[data-display-mode="low-light"] .reservation,
+:root[data-display-mode="low-light"] .menu-admin,
+:root[data-display-mode="low-light"] .menu-config,
+:root[data-display-mode="low-light"] .profile-row { color: var(--ink); }
+:root[data-display-mode="low-light"] .module-row,
+:root[data-display-mode="low-light"] .activity-row,
+:root[data-display-mode="low-light"] .reservation,
+:root[data-display-mode="low-light"] .menu-config-row,
+:root[data-display-mode="low-light"] .profile-row { border-color: var(--line); }
+:root[data-display-mode="low-light"] .floor-map-canvas { border-color: #49524a; background-color: #202620; background-image: linear-gradient(#d0dfce0c 1px, transparent 1px), linear-gradient(90deg, #d0dfce0c 1px, transparent 1px); box-shadow: inset 0 0 0 8px #252b26; }
+:root[data-display-mode="low-light"] .floor-plan-zone.zone-0 { color: #b6c6b5; border-color: #526050; background: #304034aa; }
+:root[data-display-mode="low-light"] .floor-plan-zone.zone-1 { color: #c9c0a9; border-color: #655d4d; background: #3d382eaa; }
+:root[data-display-mode="low-light"] .floor-plan-zone.zone-2 { color: #acc8cf; border-color: #4b6265; background: #2d4144aa; }
+:root[data-display-mode="low-light"] .floor-plan-kitchen { color: #d6e3d2; border-color: #526050; background: #344033; }
+:root[data-display-mode="low-light"] .floor-plan-counter { color: #f0d8bd; border-color: #635643; background: #413a2c; }
+:root[data-display-mode="low-light"] .order-summary p,
+:root[data-display-mode="low-light"] .login-subtitle,
+:root[data-display-mode="low-light"] .subtitle,
+:root[data-display-mode="low-light"] .panel-heading p { color: var(--muted); }
+:root[data-display-mode="low-light"] .login-card input,
+:root[data-display-mode="low-light"] .login-card select,
+:root[data-display-mode="low-light"] .modal input,
+:root[data-display-mode="low-light"] .modal select,
+:root[data-display-mode="low-light"] .summary-row input,
+:root[data-display-mode="low-light"] .dish-fields input { color: var(--ink); border-color: var(--line); background: #1c211d; }
+:root[data-display-mode="low-light"] .printed-document { color: #222; border-color: #ddd; background: #fff; }
+
+@media (max-width: 700px) {
+  .display-mode-control { justify-content: center; margin: 7px 0; }
+  .display-mode-control > span { margin-right: 5px; }
+  .display-mode-control button { min-height: 42px; padding-inline: 14px; }
+}
