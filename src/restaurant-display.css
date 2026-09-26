@@ -32,6 +32,7 @@
 .display-mode-control button:first-of-type { border-radius: 5px 0 0 5px; }
 .display-mode-control button:last-of-type { margin-left: -6px; border-radius: 0 5px 5px 0; }
 .display-mode-control button.selected { border-color: var(--orange); color: var(--orange); background: var(--orange-soft); }
+.offline-status { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; padding: 10px 13px; margin: 8px 0; border: 1px solid #d4a25e; border-radius: 6px; color: #4d3a18; background: #fff4d9; font-size: 11px; }.offline-status strong { flex: 0 0 auto; }.offline-status.is-offline { border-color: #bd745e; color: #6c2d1e; background: #fff0e9; }.offline-status.has-failures { border-color: #bd745e; color: #6c2d1e; background: #fff0e9; }.offline-status span { min-width: 0; }
 :root[data-display-mode] button, :root[data-display-mode] select, :root[data-display-mode] input { touch-action: manipulation; }
 :root[data-display-mode="terrace"] button, :root[data-display-mode="low-light"] button { min-height: 44px; }
 :root[data-display-mode="terrace"] .nav-item, :root[data-display-mode="low-light"] .nav-item { font-size: 13px; }
@@ -114,6 +115,8 @@
 :root[data-display-mode="low-light"] .menu-item span { color: var(--muted); }
 :root[data-display-mode="low-light"] .alert-banner { color: #ffe2d1; border-color: #714530; background: #39291f; }
 :root[data-display-mode="low-light"] .server-notice { color: #bce8c7; border-color: #3b654a; background: #20392a; }
+:root[data-display-mode="low-light"] .offline-status { color: #f5d992; border-color: #79673a; background: #342f20; }
+:root[data-display-mode="low-light"] .offline-status.is-offline, :root[data-display-mode="low-light"] .offline-status.has-failures { color: #ffc3aa; border-color: #80503d; background: #38251e; }
 
 html, body, #root { width: 100%; max-width: 100%; min-width: 0; }
 body { overflow-x: hidden; }

@@ -3,7 +3,7 @@ import './App.css'
 import './modules.css'
 import './restaurant-display.css'
 import { PlatformOwnerDashboard } from './PlatformOwnerDashboard'
-import { createDiningTable, createInvoice, createMenuItem, createOrder, createProfile, createReservation, createStockReceiptDraft, createStockWithdrawal, createPlatformRestaurant, createSubscriptionPlan, getDashboard, getFloorPlan, getHealth, getInventory, getMenu, getPlatformOverview, getPlatformSession, getProfiles, getRestaurantContext, getSession, getStockReceipts, getStockWithdrawals, login, loginPlatform, loginRestaurant, logout, logoutPlatform, logoutRestaurant, openCashDrawer, reviewStockReceipt, saveFloorPlan, sendInvoiceEmail, updateDiningTable, updateInventory, updateMenuItem, updateOrderStatus, updateRestaurantSubscription, type Dashboard, type FloorPlanConfig, type InventoryItem, type Invoice, type ManagedRestaurant, type MenuItem, type Order, type OrderLine, type PlatformOverview, type RestaurantContext, type RestaurantTable, type Role, type SessionUser, type StockReceipt, type StockReceiptLine, type StockWithdrawal, type TeamProfile } from './api'
+import { createDiningTable, createInvoice, createMenuItem, createOrder, createProfile, createReservation, createStockReceiptDraft, createStockWithdrawal, createPlatformRestaurant, createSubscriptionPlan, getDashboard, getFloorPlan, getHealth, getInventory, getMenu, getOfflineStatus, getPlatformOverview, getPlatformSession, getProfiles, getRestaurantContext, getSession, getStockReceipts, getStockWithdrawals, login, loginPlatform, loginRestaurant, logout, logoutPlatform, logoutRestaurant, openCashDrawer, reviewStockReceipt, saveFloorPlan, sendInvoiceEmail, syncOfflineQueue, updateDiningTable, updateInventory, updateMenuItem, updateOrderStatus, updateRestaurantSubscription, type Dashboard, type FloorPlanConfig, type InventoryItem, type Invoice, type ManagedRestaurant, type MenuItem, type Order, type OrderLine, type PlatformOverview, type RestaurantContext, type RestaurantTable, type Role, type SessionUser, type StockReceipt, type StockReceiptLine, type StockWithdrawal, type TeamProfile } from './api'
 import type { InvoiceAnalysis } from './invoiceOcr'
 
 type IconProps = { size?: number }
@@ -23,6 +23,11 @@ const navItems: NavItem[] = [
   { label: 'Prise de commande', icon: ClipboardList }, { label: 'Plan de salle', icon: Map },
   { label: 'Cuisine', icon: ChefHat, badge: '8' }, { label: 'Caisse & paiements', icon: WalletCards },
 ]
+function readLocalSnapshot<T>(key: string): T | null {
+  try { return JSON.parse(localStorage.getItem(key) || 'null') as T | null }
+  catch { return null }
+}
+
 function App() {
   const [activeNav, setActiveNav] = useState('Vue d’ensemble')
   const [showAdd, setShowAdd] = useState(false)
@@ -35,6 +40,8 @@ function App() {
   const [profiles, setProfiles] = useState<TeamProfile[]>([])
   const [platformOwner, setPlatformOwner] = useState(false)
   const [platformLoginMode, setPlatformLoginMode] = useState(false)
+  const [networkOnline, setNetworkOnline] = useState(navigator.onLine)
+  const [offlineQueue, setOfflineQueue] = useState({ pending: 0, failed: 0 })
   const [displayMode, setDisplayMode] = useState<DisplayMode>(() => localStorage.getItem('restaurant-display-mode') === 'low-light' ? 'low-light' : 'terrace')
   const [sessionReady, setSessionReady] = useState(false)
   const [inventory, setInventory] = useState<InventoryItem[]>([])
@@ -61,12 +68,21 @@ function App() {
     const token = localStorage.getItem('restaurant-token')
     const accessToken = localStorage.getItem('restaurant-access-token')
     if (!token) {
-      if (accessToken) Promise.all([getRestaurantContext(), getProfiles()]).then(([context, availableProfiles]) => { setRestaurantContext(context.restaurant); setProfiles(availableProfiles) }).catch(() => { localStorage.removeItem('restaurant-access-token') }).finally(() => setSessionReady(true))
+      if (accessToken && !navigator.onLine) {
+        const context = readLocalSnapshot<RestaurantContext>('restaurant-context-snapshot')
+        const availableProfiles = readLocalSnapshot<TeamProfile[]>('restaurant-profiles-snapshot') || []
+        if (context) { setRestaurantContext(context); setProfiles(availableProfiles); localStorage.setItem('restaurant-identifier', context.identifier) }
+        setSessionReady(true)
+      } else if (accessToken) Promise.all([getRestaurantContext(), getProfiles()]).then(([context, availableProfiles]) => { localStorage.setItem('restaurant-identifier', context.restaurant.identifier); localStorage.setItem('restaurant-context-snapshot', JSON.stringify(context.restaurant)); localStorage.setItem('restaurant-profiles-snapshot', JSON.stringify(availableProfiles)); setRestaurantContext(context.restaurant); setProfiles(availableProfiles) }).catch(() => { localStorage.removeItem('restaurant-access-token'); localStorage.removeItem('restaurant-identifier') }).finally(() => setSessionReady(true))
       else setSessionReady(true)
       return
     }
     Promise.all([getSession(), getRestaurantContext()]).then(([session, context]) => {
       const user = session.user
+      localStorage.setItem('restaurant-identifier', context.restaurant.identifier)
+      localStorage.setItem('restaurant-user-id', user.id)
+      localStorage.setItem('restaurant-user-snapshot', JSON.stringify(user))
+      localStorage.setItem('restaurant-context-snapshot', JSON.stringify(context.restaurant))
       setRestaurantContext(context.restaurant)
       setSessionUser(user)
       setRole(user.role)
@@ -75,14 +91,33 @@ function App() {
       return Promise.all([getDashboard(), getInventory(), getMenu(), getStockWithdrawals(), getFloorPlan(), receipts, getProfiles()])
     }).then(([data, stock, dishes, withdrawals, plan, receipts, availableProfiles]) => {
       previousOrderStatuses.current = Object.fromEntries(data.orders.map((order) => [order.id, order.status]))
+      localStorage.setItem('restaurant-profiles-snapshot', JSON.stringify(availableProfiles))
       setDashboard(data); setInventory(stock); setMenu(dishes); setStockWithdrawals(withdrawals); setFloorPlan(plan); setStockReceipts(receipts); setProfiles(availableProfiles)
       const lowStock = stock.filter((item) => item.quantity <= item.minimum)
       setNotifications(lowStock.map((item) => ({ id: `stock-low-${item.id}`, title: 'Stock à réapprovisionner', message: `${item.name} : ${item.quantity} ${item.unit} restants (seuil ${item.minimum}).`, createdAt: new Date().toISOString(), target: 'Approvisionnement', read: false })))
-    }).catch(() => {
+    }).catch(async () => {
+      if (!navigator.onLine) {
+        const user = readLocalSnapshot<SessionUser>('restaurant-user-snapshot')
+        const context = readLocalSnapshot<RestaurantContext>('restaurant-context-snapshot')
+        if (user && context) {
+          localStorage.setItem('restaurant-identifier', context.identifier)
+          localStorage.setItem('restaurant-user-id', user.id)
+          setRestaurantContext(context); setSessionUser(user); setRole(user.role)
+          setActiveNav(user.role === 'kitchen' ? 'Cuisine' : user.role === 'cashier' ? 'Caisse & paiements' : user.role === 'server' ? 'Prise de commande' : 'Vue d’ensemble')
+          const receipts = user.role === 'manager' ? getStockReceipts() : Promise.resolve([] as StockReceipt[])
+          try {
+            const [data, stock, dishes, withdrawals, plan, loadedReceipts, availableProfiles] = await Promise.all([getDashboard(), getInventory(), getMenu(), getStockWithdrawals(), getFloorPlan(), receipts, getProfiles()])
+            previousOrderStatuses.current = Object.fromEntries(data.orders.map((order) => [order.id, order.status]))
+            setDashboard(data); setInventory(stock); setMenu(dishes); setStockWithdrawals(withdrawals); setFloorPlan(plan); setStockReceipts(loadedReceipts); setProfiles(availableProfiles)
+            setServerNotice('Mode hors ligne : données locales chargées, actions en attente de synchronisation.')
+            return
+          } catch { setApiError('Données hors ligne incomplètes. Reconnecte-toi pour actualiser le restaurant.') }
+        }
+      }
       localStorage.removeItem('restaurant-token')
-      getRestaurantContext().then((context) => setRestaurantContext(context.restaurant)).catch(() => localStorage.removeItem('restaurant-access-token'))
+      if (navigator.onLine) getRestaurantContext().then((context) => setRestaurantContext(context.restaurant)).catch(() => localStorage.removeItem('restaurant-access-token'))
       setSessionUser(null)
-      setApiError('Session expirée. Reconnectez-vous à votre profil.')
+      if (navigator.onLine) setApiError('Session expirée. Reconnectez-vous à votre profil.')
     }).finally(() => setSessionReady(true))
   }, [])
   useEffect(() => { getHealth().then((health) => setStorageMode(health.storage)).catch(() => setStorageMode('unknown')) }, [])
@@ -90,6 +125,35 @@ function App() {
     document.documentElement.dataset.displayMode = displayMode
     localStorage.setItem('restaurant-display-mode', displayMode)
   }, [displayMode])
+  useEffect(() => {
+    const updateQueueCount = () => { getOfflineStatus().then(setOfflineQueue).catch(() => undefined) }
+    const synchronize = async () => {
+      setNetworkOnline(navigator.onLine)
+      updateQueueCount()
+      if (!navigator.onLine || !sessionUser || !localStorage.getItem('restaurant-token')) return
+      const result = await syncOfflineQueue().catch(() => null)
+      updateQueueCount()
+      if (!result?.synced) return
+      try {
+        const [data, stock, dishes, withdrawals] = await Promise.all([getDashboard(), getInventory(), getMenu(), getStockWithdrawals()])
+        previousOrderStatuses.current = Object.fromEntries(data.orders.map((order) => [order.id, order.status]))
+        setDashboard(data); setInventory(stock); setMenu(dishes); setStockWithdrawals(withdrawals)
+        setServerNotice(`${result.synced} action(s) hors ligne synchronisée(s).`)
+      } catch { setServerNotice('Réseau rétabli; certaines données seront actualisées au prochain chargement.') }
+    }
+    const handleOnline = () => { void synchronize() }
+    const handleOffline = () => { setNetworkOnline(false); updateQueueCount() }
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    window.addEventListener('restaurant-offline-queue-changed', updateQueueCount)
+    updateQueueCount()
+    if (navigator.onLine && sessionUser) void synchronize()
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+      window.removeEventListener('restaurant-offline-queue-changed', updateQueueCount)
+    }
+  }, [sessionUser, restaurantContext])
   useEffect(() => {
     if (!sessionUser) return
     const poll = window.setInterval(() => { getDashboard().then((next) => { const ready = next.orders.find((order) => order.status === 'ready' && previousOrderStatuses.current[order.id] !== 'ready'); if (ready && (role === 'server' || role === 'manager')) { setServerNotice(`La commande #${ready.id} de la table ${ready.table} est prête.`); setNotifications((current) => current.some((item) => item.id === `order-ready-${ready.id}`) ? current : [{ id: `order-ready-${ready.id}`, title: 'Commande prête', message: `La commande #${ready.id} de la table ${ready.table} peut être servie.`, createdAt: new Date().toISOString(), target: 'Prise de commande', read: false }, ...current]) } previousOrderStatuses.current = Object.fromEntries(next.orders.map((order) => [order.id, order.status])); setDashboard(next) }).catch(() => undefined) }, 8000)
@@ -191,12 +255,16 @@ function App() {
   const handleSendInvoice = async (invoice: Invoice): Promise<boolean> => { try { await sendInvoiceEmail(invoice.id); setServerNotice(`Facture ${invoice.invoiceNumber} envoyée par e-mail.`); return true } catch (error) { setApiError(error instanceof Error ? error.message : 'Envoi e-mail impossible.'); return false } }
   const acceptRestaurant = async (access: { token: string; restaurant: RestaurantContext }) => {
     localStorage.setItem('restaurant-access-token', access.token)
+    localStorage.setItem('restaurant-identifier', access.restaurant.identifier)
+    localStorage.setItem('restaurant-context-snapshot', JSON.stringify(access.restaurant))
     localStorage.removeItem('restaurant-token')
+    localStorage.removeItem('restaurant-user-id')
     setRestaurantContext(access.restaurant)
     setSessionUser(null)
     setDashboard(null)
     setApiError('')
     const availableProfiles = await getProfiles()
+    localStorage.setItem('restaurant-profiles-snapshot', JSON.stringify(availableProfiles))
     setProfiles(availableProfiles)
   }
   const handleRestaurantLogin = async (identifier: string, password: string) => acceptRestaurant(await loginRestaurant(identifier, password))
@@ -214,6 +282,8 @@ function App() {
   }
   const handleTeamLogin = async (user: SessionUser, token: string) => {
     localStorage.setItem('restaurant-token', token)
+    localStorage.setItem('restaurant-user-id', user.id)
+    localStorage.setItem('restaurant-user-snapshot', JSON.stringify(user))
     setSessionUser(user)
     setRole(user.role)
     setActiveNav(user.role === 'kitchen' ? 'Cuisine' : user.role === 'cashier' ? 'Caisse & paiements' : user.role === 'server' ? 'Prise de commande' : 'Vue d’ensemble')
@@ -230,8 +300,8 @@ function App() {
     setProfiles((current) => [...current, created].sort((left, right) => left.name.localeCompare(right.name)))
   }
   useEffect(() => { if (sessionUser?.role === 'manager') getStockReceipts().then(setStockReceipts).catch(() => undefined) }, [sessionUser])
-  const handleLogout = async () => { try { await logout() } finally { localStorage.removeItem('restaurant-token'); setSessionUser(null); setDashboard(null); setSessionReady(true); setActiveNav('Vue d’ensemble') } }
-  const handleRestaurantLogout = async () => { await Promise.allSettled([logout(), logoutRestaurant()]); localStorage.removeItem('restaurant-token'); localStorage.removeItem('restaurant-access-token'); setSessionUser(null); setRestaurantContext(null); setProfiles([]); setDashboard(null); setSessionReady(true); setActiveNav('Vue d’ensemble') }
+  const handleLogout = async () => { try { await logout() } finally { localStorage.removeItem('restaurant-token'); localStorage.removeItem('restaurant-user-id'); localStorage.removeItem('restaurant-user-snapshot'); setSessionUser(null); setDashboard(null); setSessionReady(true); setActiveNav('Vue d’ensemble') } }
+  const handleRestaurantLogout = async () => { await Promise.allSettled([logout(), logoutRestaurant()]); localStorage.removeItem('restaurant-token'); localStorage.removeItem('restaurant-user-id'); localStorage.removeItem('restaurant-user-snapshot'); localStorage.removeItem('restaurant-access-token'); localStorage.removeItem('restaurant-identifier'); localStorage.removeItem('restaurant-context-snapshot'); localStorage.removeItem('restaurant-profiles-snapshot'); setSessionUser(null); setRestaurantContext(null); setProfiles([]); setDashboard(null); setSessionReady(true); setActiveNav('Vue d’ensemble') }
 
   const authView = restaurantContext
     ? <LoginScreen restaurant={restaurantContext} profiles={profiles} onLogin={async (username, pin) => { const session = await login(username, pin); await handleTeamLogin(session.user, session.token) }} onSwitchRestaurant={handleRestaurantLogout} />
@@ -268,6 +338,7 @@ function App() {
       <div className="sidebar-footer"><div className="support-icon"><Bell size={17} /></div><div><strong>Besoin d’aide ?</strong><small>Centre de support</small></div><ArrowUpRight size={15} /></div>
     </aside>
     <main className="main-content">
+      {sessionUser && (!networkOnline || offlineQueue.pending > 0 || offlineQueue.failed > 0) && <div className={`offline-status ${!networkOnline ? 'is-offline' : offlineQueue.failed ? 'has-failures' : 'is-pending'}`} role="status" aria-live="polite"><strong>{!networkOnline ? 'Mode hors ligne' : offlineQueue.failed ? 'Synchronisation à vérifier' : 'Synchronisation en cours'}</strong><span>{!networkOnline ? `Consultation locale active · ${offlineQueue.pending} action(s) en attente d’envoi.` : offlineQueue.failed ? `${offlineQueue.failed} action(s) n’ont pas pu être synchronisées. Vérifie ta connexion et les permissions du profil.` : `${offlineQueue.pending} action(s) seront envoyées au restaurant.`}</span></div>}
       <div className="display-mode-control" role="group" aria-label="Mode d’affichage"><span>Affichage</span><button className={displayMode === 'terrace' ? 'selected' : ''} aria-pressed={displayMode === 'terrace'} onClick={() => setDisplayMode('terrace')}>Terrasse</button><button className={displayMode === 'low-light' ? 'selected' : ''} aria-pressed={displayMode === 'low-light'} onClick={() => setDisplayMode('low-light')}>Salle sombre</button></div>
       <header className="topbar"><button className="mobile-menu-button" aria-label="Ouvrir le menu" onClick={() => setMobileNavOpen(!mobileNavOpen)}>☰</button><div className="breadcrumb"><button className="home-button" onClick={() => setActiveNav(role === 'manager' ? 'Vue d’ensemble' : role === 'kitchen' ? 'Cuisine' : role === 'cashier' ? 'Caisse & paiements' : 'Prise de commande')}>Accueil</button><span className="dot">·</span><span>Bonjour {sessionUser.name}</span><span className="dot">·</span><span className="muted">Jeudi 24 septembre 2026</span></div><div className="top-actions"><div className="notification-wrap"><button className="icon-button notification" aria-label="Notifications" aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}><Bell size={19} />{notifications.some((item) => !item.read) && <i />}</button>{notificationsOpen && <section className="notification-panel" aria-label="Centre de notifications"><header className="notification-panel-header"><div><strong>Notifications</strong><span>{notifications.filter((item) => !item.read).length} non lue(s)</span></div><button onClick={() => setNotifications((items) => items.map((item) => ({ ...item, read: true })))}>Tout lire</button></header><div className="notification-list">{notifications.length ? notifications.map((item) => <button key={item.id} className={`notification-item ${item.read ? 'read' : 'unread'}`} onClick={() => { setNotifications((items) => items.map((current) => current.id === item.id ? { ...current, read: true } : current)); setActiveNav(item.target); setNotificationsOpen(false) }}><span className="notification-avatar"><Bell size={15} /></span><span className="notification-copy"><strong>{item.title}</strong><span>{item.message}</span><time>{formatNotificationTime(item.createdAt)}</time></span>{!item.read && <i className="unread-dot" />}</button>) : <p className="notification-empty">Vous êtes à jour. Aucune notification.</p>}</div></section>}</div><div className="profile"><span className="avatar profile-avatar">{sessionUser.name.slice(0, 2).toUpperCase()}</span><span><strong>{sessionUser.name}</strong><small>{role === 'manager' ? 'Gérante' : role === 'server' ? 'Serveur' : role === 'kitchen' ? 'Cuisine' : 'Caissier'}</small></span></div><button className="logout-button" onClick={handleLogout}>Déconnexion</button></div></header>
       {apiError && <div className="api-error">{apiError}</div>}

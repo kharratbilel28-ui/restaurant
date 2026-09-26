@@ -595,7 +595,14 @@ const server = createServer(async (request, response) => {
       if (!input.sourceFileName || !Array.isArray(input.lines) || input.lines.length === 0) return send(response, 400, { error: 'Document et lignes d’articles requis' })
       const lines = input.lines.map((line) => ({ inventoryItemId: line.inventoryItemId || '', name: String(line.name || '').trim(), quantity: Number(line.quantity), unit: String(line.unit || 'unité').trim() }))
       if (lines.some((line) => !line.name || !Number.isFinite(line.quantity) || line.quantity <= 0 || !line.unit)) return send(response, 400, { error: 'Chaque ligne doit avoir un nom, une quantité positive et une unité' })
-      const receipt = { id: `receipt-${Date.now()}`, sourceFileName: String(input.sourceFileName).slice(0, 250), sourceType: input.sourceType === 'pdf' ? 'pdf' : 'image', extractedText: String(input.extractedText || '').slice(0, 100000), status: 'draft', createdAt: new Date().toISOString(), createdBy: sessionFrom(request)?.userId || '', lines }
+      const receiptId = String(input.id || randomUUID())
+      const existingReceipt = database.stockReceipts.find((item) => item.id === receiptId)
+      if (existingReceipt) {
+        const sameLines = JSON.stringify(existingReceipt.lines.map(({ inventoryItemId, name, quantity, unit }) => ({ inventoryItemId, name, quantity, unit }))) === JSON.stringify(lines)
+        if (existingReceipt.sourceFileName === String(input.sourceFileName).slice(0, 250) && sameLines) return send(response, 200, existingReceipt)
+        return send(response, 409, { error: 'Cet identifiant de fiche existe déjà avec des données différentes' })
+      }
+      const receipt = { id: receiptId, sourceFileName: String(input.sourceFileName).slice(0, 250), sourceType: input.sourceType === 'pdf' ? 'pdf' : 'image', extractedText: String(input.extractedText || '').slice(0, 100000), status: 'draft', createdAt: input.createdAt || new Date().toISOString(), createdBy: sessionFrom(request)?.userId || '', lines }
       database.stockReceipts.unshift(receipt)
       await saveDatabase(database, restaurantId)
       return send(response, 201, receipt)
@@ -644,7 +651,13 @@ const server = createServer(async (request, response) => {
       if (roleFrom(request) !== 'manager') return send(response, 403, { error: 'Seule la gérante peut modifier le menu' })
       const input = await body(request)
       if (!input.name || !input.price) return send(response, 400, { error: 'Nom et prix obligatoires' })
-      const dish = { id: `dish-${Date.now()}`, name: input.name, price: Number(input.price), image: input.image || '', active: true }
+      const dishId = String(input.id || randomUUID())
+      const existingDish = database.menu.find((item) => item.id === dishId)
+      if (existingDish) {
+        if (existingDish.name === String(input.name).trim() && Number(existingDish.price) === Number(input.price) && existingDish.image === (input.image || '')) return send(response, 200, existingDish)
+        return send(response, 409, { error: 'Cet identifiant de plat existe déjà avec des données différentes' })
+      }
+      const dish = { id: dishId, name: String(input.name).trim(), price: Number(input.price), image: input.image || '', active: true }
       database.menu.push(dish)
       await saveDatabase(database, restaurantId)
       return send(response, 201, dish)
@@ -730,10 +743,17 @@ const server = createServer(async (request, response) => {
       if (!['manager', 'kitchen'].includes(roleFrom(request))) return send(response, 403, { error: 'Seule la cuisine ou la gérance peut enregistrer une sortie' })
       const input = await body(request)
       if (!Array.isArray(input.items) || input.items.length === 0) return send(response, 400, { error: 'Ajoutez au moins un produit au bon de sortie' })
+      const withdrawalId = String(input.id || randomUUID())
+      const existingWithdrawal = (database.stockWithdrawals || []).find((item) => item.id === withdrawalId)
+      if (existingWithdrawal) {
+        const sameItems = JSON.stringify(existingWithdrawal.items.map(({ inventoryItemId, quantity }) => ({ inventoryItemId, quantity }))) === JSON.stringify(input.items.map((line) => ({ inventoryItemId: line.inventoryItemId, quantity: Number(line.quantity) })))
+        if (sameItems && existingWithdrawal.note === (input.note || '')) return send(response, 200, { withdrawal: existingWithdrawal, inventory: database.inventory })
+        return send(response, 409, { error: 'Cet identifiant de sortie existe déjà avec des données différentes' })
+      }
       const lines = input.items.map((line) => ({ item: database.inventory.find((item) => item.id === line.inventoryItemId), quantity: Number(line.quantity) }))
       if (lines.some((line) => !line.item || !Number.isFinite(line.quantity) || line.quantity <= 0 || line.quantity > line.item.quantity)) return send(response, 400, { error: 'Produit ou quantité de sortie invalide' })
       for (const line of lines) line.item.quantity = Number((line.item.quantity - line.quantity).toFixed(3))
-      const withdrawal = { id: `withdrawal-${Date.now()}`, reason: 'Sortie vers la cuisine', note: input.note || '', createdAt: new Date().toISOString(), createdBy: sessionFrom(request)?.userId || '', items: lines.map(({ item, quantity }) => ({ inventoryItemId: item.id, name: item.name, quantity, unit: item.unit })) }
+      const withdrawal = { id: withdrawalId, reason: 'Sortie vers la cuisine', note: input.note || '', createdAt: input.createdAt || new Date().toISOString(), createdBy: sessionFrom(request)?.userId || '', items: lines.map(({ item, quantity }) => ({ inventoryItemId: item.id, name: item.name, quantity, unit: item.unit })) }
       database.stockWithdrawals.unshift(withdrawal)
       await saveDatabase(database, restaurantId)
       return send(response, 201, { withdrawal, inventory: database.inventory })
@@ -742,7 +762,13 @@ const server = createServer(async (request, response) => {
       if (!requireSession(request, response)) return
       const input = await body(request)
       if (!input.name || !input.time || !input.people) return send(response, 400, { error: 'name, time et people sont obligatoires' })
-      const reservation = { id: `res-${Date.now()}`, name: input.name, time: input.time, people: Number(input.people), table: input.table || 'À attribuer', status: 'confirmed' }
+      const reservationId = String(input.id || randomUUID())
+      const existingReservation = database.reservations.find((item) => item.id === reservationId)
+      if (existingReservation) {
+        if (existingReservation.name === input.name && existingReservation.time === input.time && existingReservation.people === Number(input.people) && existingReservation.table === (input.table || 'À attribuer')) return send(response, 200, existingReservation)
+        return send(response, 409, { error: 'Cet identifiant de réservation existe déjà avec des données différentes' })
+      }
+      const reservation = { id: reservationId, name: input.name, time: input.time, people: Number(input.people), table: input.table || 'À attribuer', status: 'confirmed' }
       database.reservations.push(reservation)
       await saveDatabase(database, restaurantId)
       return send(response, 201, reservation)
@@ -752,7 +778,14 @@ const server = createServer(async (request, response) => {
       const input = await body(request)
       if (!input.table || !Array.isArray(input.items) || input.items.length === 0) return send(response, 400, { error: 'table et items sont obligatoires' })
       const lines = input.items.map((item) => ({ name: item.name, quantity: Number(item.quantity), price: Number(item.price) }))
-      const order = { id: String(1050 + database.orders.length), table: input.table, items: lines.reduce((sum, item) => sum + item.quantity, 0), amount: Number(input.amount || 0), status: 'received', note: input.note || '', lines, createdAt: new Date().toISOString() }
+      const orderId = String(input.id || randomUUID())
+      const existingOrder = database.orders.find((item) => item.id === orderId)
+      if (existingOrder) {
+        const sameLines = JSON.stringify(existingOrder.lines || []) === JSON.stringify(lines)
+        if (existingOrder.table === input.table && sameLines && existingOrder.amount === Number(input.amount || 0) && existingOrder.note === (input.note || '')) return send(response, 200, existingOrder)
+        return send(response, 409, { error: 'Cet identifiant de commande existe déjà avec des données différentes' })
+      }
+      const order = { id: orderId, table: input.table, items: lines.reduce((sum, item) => sum + item.quantity, 0), amount: Number(input.amount || 0), status: 'received', note: input.note || '', lines, createdAt: input.createdAt || new Date().toISOString() }
       database.orders.unshift(order)
       await saveDatabase(database, restaurantId)
       return send(response, 201, order)

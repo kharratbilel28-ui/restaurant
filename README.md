@@ -53,3 +53,14 @@ If you are developing a production application, we recommend enabling type-aware
 ```
 
 See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+
+## Installation PWA et mode hors ligne
+
+La version HTTPS de Render (ou `localhost`) peut etre installee comme application :
+
+- Android/Chrome : ouvrir le menu du navigateur, puis choisir **Installer l'application** ou **Ajouter a l'ecran d'accueil**.
+- iPhone/iPad/Safari : bouton **Partager**, puis **Sur l'ecran d'accueil**. L'icone ServicePilot et le mode autonome sont declares dans le manifeste et les metadonnees Apple.
+
+Vite genere `manifest.json` et `service-worker.js` pendant `npm run build`. Le service worker precache l'App Shell et les ressources locales. Les lectures API sont mises en cache dans IndexedDB avec une cle par identifiant de restaurant. Si le reseau coupe pendant une session ouverte, les donnees deja consultees restent lisibles; les nouvelles commandes, reservations, plats, bons de sortie et brouillons d'approvisionnement sont enregistres dans une file locale avec UUID, puis synchronises quand le reseau revient. Le serveur deduplique ces creations par UUID. Les factures, paiements et validations de stock restent en ligne.
+
+Pour tester dans Chrome : ouvrir l'application en ligne une fois, puis DevTools > **Application** pour verifier Manifest et Service Workers. Dans DevTools > **Network**, activer **Offline**, puis essayer de consulter les donnees et de creer une commande; retablir le reseau pour observer la synchronisation et le message de confirmation. La file hors ligne est locale a l'appareil et au restaurant; les sessions d'equipe restent necessaires pour la synchronisation.
