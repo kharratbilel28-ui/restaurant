@@ -39,7 +39,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     if (cached !== undefined) return cached
     throw new Error('Données non disponibles hors ligne. Ouvre la page une fois avec une connexion.')
   }
-  if (method !== 'GET' && !navigator.onLine && canQueueOffline(method, path)) return queueOfflineRequest<T>(method, path, options?.body)
+  if (method !== 'GET' && !navigator.onLine && isOfflinePaymentRequest(method, path, options?.body)) throw new Error('L’encaissement exige une connexion réseau; aucune somme n’a été marquée payée.')
+  if (method !== 'GET' && !navigator.onLine && canQueueOffline(method, path, options?.body)) return queueOfflineRequest<T>(method, path, options?.body)
   let response: Response
   try { response = await fetch(`${apiUrl}${path}`, { ...options, method, headers }) }
   catch (error) {
@@ -47,7 +48,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
       const cached = await readCachedApi<T>(path)
       if (cached !== undefined) return cached
     }
-    if (method !== 'GET' && canQueueOffline(method, path)) return queueOfflineRequest<T>(method, path, options?.body)
+    if (method !== 'GET' && isOfflinePaymentRequest(method, path, options?.body)) throw new Error('Le réseau est indisponible; l’encaissement n’a pas été enregistré.')
+    if (method !== 'GET' && canQueueOffline(method, path, options?.body)) return queueOfflineRequest<T>(method, path, options?.body)
     throw error
   }
   if (!response.ok) {
@@ -60,9 +62,15 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return result
 }
 
-function canQueueOffline(method: string, path: string) {
+function isOfflinePaymentRequest(method: string, path: string, body: BodyInit | null | undefined) {
+  if (method !== 'PATCH' || !/^\/orders\/[^/]+$/.test(path) || typeof body !== 'string') return false
+  try { return JSON.parse(body).status === 'paid' } catch { return false }
+}
+
+function canQueueOffline(method: string, path: string, body: BodyInit | null | undefined) {
   if (method === 'POST') return ['/orders', '/menu', '/reservations', '/inventory/withdrawals', '/inventory/receipts'].includes(path)
-  return method === 'PATCH' && (/^\/orders\/[^/]+$/.test(path) || /^\/inventory\/[^/]+$/.test(path))
+  if (method === 'PATCH' && /^\/orders\/[^/]+$/.test(path)) return !isOfflinePaymentRequest(method, path, body)
+  return method === 'PATCH' && /^\/inventory\/[^/]+$/.test(path)
 }
 
 async function queueOfflineRequest<T>(method: string, path: string, body: BodyInit | null | undefined): Promise<T> {
