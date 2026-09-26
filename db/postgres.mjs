@@ -95,7 +95,7 @@ export async function getInvoicePostgres(restaurantId, id) {
   const result = await pool.query('SELECT id, invoice_number AS "invoiceNumber", order_id AS "orderId", issued_at AS "issuedAt", seller, buyer, total_net AS "totalNet", total_vat AS "totalVat", total_gross AS "totalGross", emailed_at AS "emailedAt" FROM invoices WHERE restaurant_id = $1 AND id = $2', [restaurantId, id])
   if (!result.rows[0]) return null
   const lines = await pool.query('SELECT name, quantity, unit_price AS "unitPrice", vat_rate AS "vatRate", net_amount AS "netAmount", vat_amount AS "vatAmount", gross_amount AS "grossAmount" FROM invoice_lines WHERE restaurant_id = $1 AND invoice_id = $2 ORDER BY line_index', [restaurantId, id])
-  return { ...result.rows[0], lines: lines.rows.map((line) => ({ ...line, quantity: Number(line.quantity), unitPrice: Number(line.unitPrice), vatRate: Number(line.vatRate), netAmount: Number(line.netAmount), vatAmount: Number(line.vatAmount), grossAmount: Number(line.grossAmount) })) }
+  return { ...result.rows[0], totalNet: Number(result.rows[0].totalNet), totalVat: Number(result.rows[0].totalVat), totalGross: Number(result.rows[0].totalGross), lines: lines.rows.map((line) => ({ ...line, quantity: Number(line.quantity), unitPrice: Number(line.unitPrice), vatRate: Number(line.vatRate), netAmount: Number(line.netAmount), vatAmount: Number(line.vatAmount), grossAmount: Number(line.grossAmount) })) }
 }
 
 export async function createInvoicePostgres(restaurantId, invoice) {
