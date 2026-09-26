@@ -71,7 +71,8 @@ function App() {
       setSessionUser(user)
       setRole(user.role)
       setActiveNav(user.role === 'kitchen' ? 'Cuisine' : user.role === 'cashier' ? 'Caisse & paiements' : user.role === 'server' ? 'Prise de commande' : 'Vue d’ensemble')
-      return Promise.all([getDashboard(), getInventory(), getMenu(), getStockWithdrawals(), getFloorPlan(), getStockReceipts(), getProfiles()])
+      const receipts = user.role === 'manager' ? getStockReceipts() : Promise.resolve([] as StockReceipt[])
+      return Promise.all([getDashboard(), getInventory(), getMenu(), getStockWithdrawals(), getFloorPlan(), receipts, getProfiles()])
     }).then(([data, stock, dishes, withdrawals, plan, receipts, availableProfiles]) => {
       previousOrderStatuses.current = Object.fromEntries(data.orders.map((order) => [order.id, order.status]))
       setDashboard(data); setInventory(stock); setMenu(dishes); setStockWithdrawals(withdrawals); setFloorPlan(plan); setStockReceipts(receipts); setProfiles(availableProfiles)
@@ -218,9 +219,10 @@ function App() {
     setActiveNav(user.role === 'kitchen' ? 'Cuisine' : user.role === 'cashier' ? 'Caisse & paiements' : user.role === 'server' ? 'Prise de commande' : 'Vue d’ensemble')
     setSessionReady(true)
     try {
-      const [data, stock, dishes, withdrawals, plan, receipts, availableProfiles] = await Promise.all([getDashboard(), getInventory(), getMenu(), getStockWithdrawals(), getFloorPlan(), getStockReceipts(), getProfiles()])
+      const receipts = user.role === 'manager' ? getStockReceipts() : Promise.resolve([] as StockReceipt[])
+      const [data, stock, dishes, withdrawals, plan, loadedReceipts, availableProfiles] = await Promise.all([getDashboard(), getInventory(), getMenu(), getStockWithdrawals(), getFloorPlan(), receipts, getProfiles()])
       previousOrderStatuses.current = Object.fromEntries(data.orders.map((order) => [order.id, order.status]))
-      setDashboard(data); setInventory(stock); setMenu(dishes); setStockWithdrawals(withdrawals); setFloorPlan(plan); setStockReceipts(receipts); setProfiles(availableProfiles)
+      setDashboard(data); setInventory(stock); setMenu(dishes); setStockWithdrawals(withdrawals); setFloorPlan(plan); setStockReceipts(loadedReceipts); setProfiles(availableProfiles)
     } catch { setApiError('Connexion établie, mais les données du restaurant ne sont pas disponibles.') }
   }
   const handleCreateProfile = async (profile: { username: string; name: string; role: Role; pin: string }) => {
