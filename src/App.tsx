@@ -13,6 +13,7 @@ const Package = makeIcon('□'), Plus = makeIcon('+'), Settings = makeIcon('⚙'
 const Utensils = makeIcon('♧'), Users = makeIcon('♙'), WalletCards = makeIcon('▭')
 
 type NavItem = { label: string; icon: IconComponent; badge?: string }
+type NotificationItem = { id: string; title: string; message: string; createdAt: string; target: string; read: boolean }
 const navItems: NavItem[] = [
   { label: 'Vue d’ensemble', icon: LayoutDashboard }, { label: 'Menu & plats', icon: Utensils }, { label: 'Réservations', icon: CalendarDays, badge: '12' },
   { label: 'Prise de commande', icon: ClipboardList }, { label: 'Plan de salle', icon: Map },
@@ -31,6 +32,8 @@ function App() {
   const [selectedTable, setSelectedTable] = useState('')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [serverNotice, setServerNotice] = useState('')
+  const [notifications, setNotifications] = useState<NotificationItem[]>([])
+  const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [menu, setMenu] = useState<MenuItem[]>([])
   const [stockWithdrawals, setStockWithdrawals] = useState<StockWithdrawal[]>([])
   const previousOrderStatuses = useRef<Record<string, string>>({})
@@ -43,13 +46,21 @@ function App() {
       return
     }
     const restore = getSession().then(({ user }) => user)
-    restore.then((user) => { setSessionUser(user); setRole(user.role); setActiveNav(user.role === 'kitchen' ? 'Cuisine' : user.role === 'cashier' ? 'Caisse & paiements' : user.role === 'server' ? 'Prise de commande' : 'Vue d’ensemble'); return Promise.all([getDashboard(), getInventory(), getMenu(), getStockWithdrawals()]) }).then(([data, stock, dishes, withdrawals]) => { previousOrderStatuses.current = Object.fromEntries(data.orders.map((order) => [order.id, order.status])); setDashboard(data); setInventory(stock); setMenu(dishes); setStockWithdrawals(withdrawals) }).catch(() => { localStorage.removeItem('restaurant-token'); setApiError('API indisponible : lancez npm run api') }).finally(() => setSessionReady(true))
+    restore.then((user) => { setSessionUser(user); setRole(user.role); setActiveNav(user.role === 'kitchen' ? 'Cuisine' : user.role === 'cashier' ? 'Caisse & paiements' : user.role === 'server' ? 'Prise de commande' : 'Vue d’ensemble'); return Promise.all([getDashboard(), getInventory(), getMenu(), getStockWithdrawals()]) }).then(([data, stock, dishes, withdrawals]) => { previousOrderStatuses.current = Object.fromEntries(data.orders.map((order) => [order.id, order.status])); setDashboard(data); setInventory(stock); setMenu(dishes); setStockWithdrawals(withdrawals); const lowStock = stock.filter((item) => item.quantity <= item.minimum); setNotifications(lowStock.map((item) => ({ id: `stock-low-${item.id}`, title: 'Stock à réapprovisionner', message: `${item.name} : ${item.quantity} ${item.unit} restants (seuil ${item.minimum}).`, createdAt: new Date().toISOString(), target: role === 'kitchen' ? 'Approvisionnement' : 'Approvisionnement', read: false }))) }).catch(() => { localStorage.removeItem('restaurant-token'); setApiError('Connexion impossible au serveur. Vérifiez votre connexion réseau ou réessayez.') }).finally(() => setSessionReady(true))
   }, [])
   useEffect(() => {
     if (!sessionUser) return
-    const poll = window.setInterval(() => { getDashboard().then((next) => { const ready = next.orders.find((order) => order.status === 'ready' && previousOrderStatuses.current[order.id] !== 'ready'); if (ready && (role === 'server' || role === 'manager')) setServerNotice(`La commande #${ready.id} de la table ${ready.table} est prête.`); previousOrderStatuses.current = Object.fromEntries(next.orders.map((order) => [order.id, order.status])); setDashboard(next) }).catch(() => undefined) }, 8000)
+    const poll = window.setInterval(() => { getDashboard().then((next) => { const ready = next.orders.find((order) => order.status === 'ready' && previousOrderStatuses.current[order.id] !== 'ready'); if (ready && (role === 'server' || role === 'manager')) { setServerNotice(`La commande #${ready.id} de la table ${ready.table} est prête.`); setNotifications((current) => current.some((item) => item.id === `order-ready-${ready.id}`) ? current : [{ id: `order-ready-${ready.id}`, title: 'Commande prête', message: `La commande #${ready.id} de la table ${ready.table} peut être servie.`, createdAt: new Date().toISOString(), target: 'Prise de commande', read: false }, ...current]) } previousOrderStatuses.current = Object.fromEntries(next.orders.map((order) => [order.id, order.status])); setDashboard(next) }).catch(() => undefined) }, 8000)
     return () => window.clearInterval(poll)
   }, [sessionUser, role])
+  useEffect(() => {
+    if (!sessionUser) return
+    const lowStockItems = role === 'manager' || role === 'kitchen' ? inventory.filter((item) => item.quantity <= item.minimum) : []
+    setNotifications((current) => {
+      const additions = lowStockItems.filter((stockItem) => !current.some((notification) => notification.id === `stock-low-${stockItem.id}`)).map((stockItem) => ({ id: `stock-low-${stockItem.id}`, title: 'Stock à réapprovisionner', message: `${stockItem.name} : ${stockItem.quantity} ${stockItem.unit} restants (seuil ${stockItem.minimum}).`, createdAt: new Date().toISOString(), target: role === 'kitchen' ? 'Approvisionnement' : 'Approvisionnement', read: false }))
+      return additions.length ? [...additions, ...current] : current
+    })
+  }, [sessionUser, inventory, role])
   useEffect(() => {
     if (activeNav !== 'Prise de commande') return
     const form = document.querySelector('.order-form')
@@ -76,6 +87,7 @@ function App() {
       const order = await createOrder({ table: selectedTable, items, amount, note })
       setDashboard((current) => current ? { ...current, orders: [order, ...current.orders] } : current)
       setServerNotice(`Commande #${order.id} envoyée en cuisine.`)
+      setNotifications((current) => [{ id: `order-sent-${order.id}`, title: 'Commande envoyée', message: `Commande #${order.id} de la table ${selectedTable} transmise en cuisine.`, createdAt: new Date().toISOString(), target: 'Prise de commande', read: false }, ...current])
       return true
     } catch {
       setApiError('Impossible d’envoyer la commande. Vérifiez le rôle du serveur.')
@@ -97,6 +109,7 @@ function App() {
       setInventory(result.inventory)
       setStockWithdrawals((current) => [result.withdrawal, ...current])
       setServerNotice(`Bon de sortie ${result.withdrawal.id} enregistré; stock déduit.`)
+      setNotifications((current) => [{ id: result.withdrawal.id, title: 'Sortie de stock enregistrée', message: `${result.withdrawal.items.length} produit(s) déduits pour la cuisine.`, createdAt: result.withdrawal.createdAt, target: 'Approvisionnement', read: false }, ...current])
       return true
     } catch { setApiError('Impossible d’enregistrer le bon de sortie.')
       return false
@@ -133,7 +146,7 @@ function App() {
       <div className="sidebar-footer"><div className="support-icon"><Bell size={17} /></div><div><strong>Besoin d’aide ?</strong><small>Centre de support</small></div><ArrowUpRight size={15} /></div>
     </aside>
     <main className="main-content">
-      <header className="topbar"><button className="mobile-menu-button" aria-label="Ouvrir le menu" onClick={() => setMobileNavOpen(!mobileNavOpen)}>☰</button><div className="breadcrumb"><button className="home-button" onClick={() => setActiveNav(role === 'manager' ? 'Vue d’ensemble' : role === 'kitchen' ? 'Cuisine' : role === 'cashier' ? 'Caisse & paiements' : 'Prise de commande')}>Accueil</button><span className="dot">·</span><span>Bonjour {sessionUser.name}</span><span className="dot">·</span><span className="muted">Jeudi 24 septembre 2026</span></div><div className="top-actions"><button className="icon-button notification" aria-label="Notifications" onClick={() => { setAlertVisible(!alertVisible); setServerNotice('') }}><Bell size={19} />{(alertVisible || serverNotice) && <i />}</button><div className="profile"><span className="avatar profile-avatar">{sessionUser.name.slice(0, 2).toUpperCase()}</span><span><strong>{sessionUser.name}</strong><small>{role === 'manager' ? 'Gérante' : role === 'server' ? 'Serveur' : role === 'kitchen' ? 'Cuisine' : 'Caissier'}</small></span></div><button className="logout-button" onClick={handleLogout}>Déconnexion</button></div></header>
+      <header className="topbar"><button className="mobile-menu-button" aria-label="Ouvrir le menu" onClick={() => setMobileNavOpen(!mobileNavOpen)}>☰</button><div className="breadcrumb"><button className="home-button" onClick={() => setActiveNav(role === 'manager' ? 'Vue d’ensemble' : role === 'kitchen' ? 'Cuisine' : role === 'cashier' ? 'Caisse & paiements' : 'Prise de commande')}>Accueil</button><span className="dot">·</span><span>Bonjour {sessionUser.name}</span><span className="dot">·</span><span className="muted">Jeudi 24 septembre 2026</span></div><div className="top-actions"><div className="notification-wrap"><button className="icon-button notification" aria-label="Notifications" aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}><Bell size={19} />{notifications.some((item) => !item.read) && <i />}</button>{notificationsOpen && <section className="notification-panel" aria-label="Centre de notifications"><header className="notification-panel-header"><div><strong>Notifications</strong><span>{notifications.filter((item) => !item.read).length} non lue(s)</span></div><button onClick={() => setNotifications((items) => items.map((item) => ({ ...item, read: true })))}>Tout lire</button></header><div className="notification-list">{notifications.length ? notifications.map((item) => <button key={item.id} className={`notification-item ${item.read ? 'read' : 'unread'}`} onClick={() => { setNotifications((items) => items.map((current) => current.id === item.id ? { ...current, read: true } : current)); setActiveNav(item.target); setNotificationsOpen(false) }}><span className="notification-avatar"><Bell size={15} /></span><span className="notification-copy"><strong>{item.title}</strong><span>{item.message}</span><time>{formatNotificationTime(item.createdAt)}</time></span>{!item.read && <i className="unread-dot" />}</button>) : <p className="notification-empty">Vous êtes à jour. Aucune notification.</p>}</div></section>}</div><div className="profile"><span className="avatar profile-avatar">{sessionUser.name.slice(0, 2).toUpperCase()}</span><span><strong>{sessionUser.name}</strong><small>{role === 'manager' ? 'Gérante' : role === 'server' ? 'Serveur' : role === 'kitchen' ? 'Cuisine' : 'Caissier'}</small></span></div><button className="logout-button" onClick={handleLogout}>Déconnexion</button></div></header>
       {apiError && <div className="api-error">{apiError}</div>}
       {serverNotice && <div className="server-notice"><Bell size={15} /><span>{serverNotice}</span><button onClick={() => setServerNotice('')} aria-label="Fermer">×</button></div>}
       {activeNav === 'Vue d’ensemble' && <div className="page-heading"><div><p className="eyebrow">JEUDI 24 SEPTEMBRE · SERVICE DU SOIR</p><h1>Vue d’ensemble</h1><p className="subtitle">Voici ce qui se passe dans votre restaurant aujourd’hui.</p></div><button className="primary-button" onClick={() => setShowAdd(true)}><Plus size={18} /> Nouvelle réservation</button></div>}
@@ -184,3 +197,12 @@ function KitchenStockModule({ items, withdrawals, onSubmit }: { items: Inventory
 }
 
 export default App
+
+function formatNotificationTime(value: string) {
+  const elapsedMinutes = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60000))
+  if (elapsedMinutes < 1) return 'À l’instant'
+  if (elapsedMinutes < 60) return `Il y a ${elapsedMinutes} min`
+  const elapsedHours = Math.floor(elapsedMinutes / 60)
+  if (elapsedHours < 24) return `Il y a ${elapsedHours} h`
+  return new Date(value).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })
+}
