@@ -138,7 +138,10 @@ body { overflow-x: hidden; }
   .order-module > div { width: 100%; min-width: 0; padding: 24px 12px; }
   .order-module h2 { font-size: 20px; }
   .floor-map-canvas { max-width: calc(100% - 24px); }
-  .sidebar.mobile-open .sidebar-logout { display: block; width: 100%; min-height: 48px; padding: 10px 12px; margin: 12px 0 4px; border: 1px solid #b95a42; border-radius: 6px; color: #fff; background: #8f3529; text-align: left; font-size: 14px; font-weight: 700; }
+  .sidebar.mobile-open .sidebar-logout { position: sticky; bottom: env(safe-area-inset-bottom); z-index: 6; display: block; flex: 0 0 auto; width: 100%; min-height: 52px; padding: 10px 12px; margin: 12px 0 4px; border: 1px solid #b95a42; border-radius: 6px; color: #fff; background: #8f3529; box-shadow: 0 3px 12px #102a2080; text-align: left; font-size: 14px; font-weight: 700; }
 }
 .sidebar-logout { display: none; }
 :root[data-display-mode="low-light"] .sidebar-logout { color: #fff1ea; border-color: #b96d57; background: #713629; }
+:root[data-display-mode="low-light"] .sidebar.mobile-open .sidebar-logout { background: #713629; }
+:root[data-display-mode="terrace"] .cashier-ready-pill { color: #154b2f; border: 1px solid #8db99a; background: #e4f4e8; }
+:root[data-display-mode="low-light"] .cashier-ready-pill { color: #b9e9c4; border: 1px solid #467652; background: #203d29; }
