@@ -1,29 +1,29 @@
 :root[data-display-mode="terrace"] {
-  --ink: #171b18;
-  --muted: #4c554e;
-  --line: #c8d0c9;
+  --ink: #17251e;
+  --muted: #52645a;
+  --line: #d4ded6;
   --paper: #ffffff;
-  --cream: #f5f7f3;
-  --orange: #a9421e;
-  --orange-soft: #ffebe1;
-  --green: #17633b;
-  --green-soft: #e4f4e9;
-  --blue: #17547a;
-  --blue-soft: #e5f2f9;
+  --cream: #f4f7f4;
+  --orange: #ad472b;
+  --orange-soft: #ffebe3;
+  --green: #246547;
+  --green-soft: #e5f3e9;
+  --blue: #285c76;
+  --blue-soft: #e8f2f7;
 }
 
 :root[data-display-mode="low-light"] {
-  --ink: #f0f1eb;
-  --muted: #c2c5bc;
-  --line: #484e48;
-  --paper: #252a26;
-  --cream: #171b18;
-  --orange: #ffad7e;
-  --orange-soft: #493126;
-  --green: #9cdbad;
-  --green-soft: #253d2d;
-  --blue: #a9d5f0;
-  --blue-soft: #263b48;
+  --ink: #f1f4ef;
+  --muted: #bbc8be;
+  --line: #46564b;
+  --paper: #222d26;
+  --cream: #141d18;
+  --orange: #ff9e76;
+  --orange-soft: #482e25;
+  --green: #92d7a6;
+  --green-soft: #253c2e;
+  --blue: #9bcce5;
+  --blue-soft: #263a45;
 }
 
 .display-mode-control { display: flex; justify-content: flex-end; align-items: center; gap: 5px; margin: 9px 0; color: var(--muted); font-size: 10px; }
@@ -94,4 +94,47 @@
   .display-mode-control { justify-content: center; margin: 7px 0; }
   .display-mode-control > span { margin-right: 5px; }
   .display-mode-control button { min-height: 42px; padding-inline: 14px; }
+}
+
+:root[data-display-mode="terrace"] .sidebar { background: #173f32; color: #e4eee7; }
+:root[data-display-mode="terrace"] .nav-item:hover, :root[data-display-mode="terrace"] .nav-item.active { color: #fff; background: #285444; }
+:root[data-display-mode="terrace"] .nav-item.active { box-shadow: inset 3px 0 #f1b36f; }
+:root[data-display-mode="terrace"] .primary-button { background: var(--green); }
+:root[data-display-mode="terrace"] .primary-button:hover { background: #20543d; }
+:root[data-display-mode="low-light"] .sidebar { color: #e1ebe3; background: #111f18; }
+:root[data-display-mode="low-light"] .nav-item { color: #bacbbf; }
+:root[data-display-mode="low-light"] .nav-item:hover, :root[data-display-mode="low-light"] .nav-item.active { color: #fff; background: #2a4435; }
+:root[data-display-mode="low-light"] .nav-item.active { box-shadow: inset 3px 0 #ffad7e; }
+:root[data-display-mode="low-light"] .primary-button { color: #102219; background: #92d7a6; }
+:root[data-display-mode="low-light"] .primary-button:hover { background: #a9e5b8; }
+:root[data-display-mode="low-light"] .action-button,
+:root[data-display-mode="low-light"] .upload-button,
+:root[data-display-mode="low-light"] .dish-photo-upload { color: var(--ink); border-color: var(--line); background: #26372c; }
+:root[data-display-mode="low-light"] .menu-item { color: var(--ink); border-color: var(--line); background: #222d26; }
+:root[data-display-mode="low-light"] .menu-item span { color: var(--muted); }
+:root[data-display-mode="low-light"] .alert-banner { color: #ffe2d1; border-color: #714530; background: #39291f; }
+:root[data-display-mode="low-light"] .server-notice { color: #bce8c7; border-color: #3b654a; background: #20392a; }
+
+html, body, #root { width: 100%; max-width: 100%; min-width: 0; }
+body { overflow-x: hidden; }
+.app-shell { width: 100%; min-width: 0; overflow-x: clip; }
+.main-content { min-width: 0; }
+.content-grid > *, .panel, .module-list, .order-form { min-width: 0; max-width: 100%; }
+@media (max-width: 700px) {
+  .app-shell { display: block; }
+  .main-content { width: 100%; max-width: 100%; min-width: 0; padding: 0 12px 30px; margin: 0; }
+  .topbar { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; gap: 7px; width: 100%; min-width: 0; height: auto; min-height: 62px; padding: 7px 0; }
+  .breadcrumb { min-width: 0; gap: 5px; overflow: hidden; white-space: nowrap; font-size: 10px; }
+  .top-actions { min-width: 0; gap: 7px; }
+  .profile { min-width: 0; gap: 0; }
+  .page-heading { min-width: 0; padding: 24px 0 18px; }
+  .page-heading h1, .module-heading h1 { max-width: 100%; font-size: 27px; line-height: 1.15; overflow-wrap: anywhere; }
+  .module-heading { padding-bottom: 16px; }
+  .panel-heading, .module-list-heading { min-width: 0; padding-inline: 13px; }
+  .module-row { min-width: 0; gap: 9px; padding: 13px; }
+  .module-row > div { min-width: 0; }
+  .order-module { min-height: 210px; }
+  .order-module > div { width: 100%; min-width: 0; padding: 24px 12px; }
+  .order-module h2 { font-size: 20px; }
+  .floor-map-canvas { max-width: calc(100% - 24px); }
 }
