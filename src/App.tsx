@@ -38,7 +38,11 @@ function App() {
 
   useEffect(() => {
     const token = localStorage.getItem('restaurant-token')
-    const restore = token ? getSession().then(({ user }) => user) : login('manager', '1234').then(({ token: freshToken, user }) => { localStorage.setItem('restaurant-token', freshToken); return user })
+    if (!token) {
+      setSessionReady(true)
+      return
+    }
+    const restore = getSession().then(({ user }) => user)
     restore.then((user) => { setSessionUser(user); setRole(user.role); setActiveNav(user.role === 'kitchen' ? 'Cuisine' : user.role === 'cashier' ? 'Caisse & paiements' : user.role === 'server' ? 'Prise de commande' : 'Vue d’ensemble'); return Promise.all([getDashboard(), getInventory(), getMenu(), getStockWithdrawals()]) }).then(([data, stock, dishes, withdrawals]) => { previousOrderStatuses.current = Object.fromEntries(data.orders.map((order) => [order.id, order.status])); setDashboard(data); setInventory(stock); setMenu(dishes); setStockWithdrawals(withdrawals) }).catch(() => { localStorage.removeItem('restaurant-token'); setApiError('API indisponible : lancez npm run api') }).finally(() => setSessionReady(true))
   }, [])
   useEffect(() => {
@@ -99,11 +103,7 @@ function App() {
     }
   }
   const handleMenuItem = async (item: { name: string; price: number; image: string }) => { try { const dish = await createMenuItem(item); setMenu((current) => [...current, dish]) } catch { setApiError('Impossible d’ajouter ce plat au menu.') } }
-  const switchRole = async (nextRole: Role) => {
-    const pins: Record<Role, string> = { manager: '1234', server: '2222', kitchen: '3333', cashier: '4444' }
-    try { const session = await login(nextRole, pins[nextRole]); localStorage.setItem('restaurant-token', session.token); setSessionUser(session.user); setRole(nextRole); setActiveNav(nextRole === 'kitchen' ? 'Cuisine' : nextRole === 'cashier' ? 'Caisse & paiements' : nextRole === 'server' ? 'Prise de commande' : 'Vue d’ensemble') } catch { setApiError('Connexion impossible pour ce rôle') }
-  }
-  const handleLogout = async () => { try { await logout() } finally { localStorage.removeItem('restaurant-token'); setSessionUser(null); setDashboard(null) } }
+  const handleLogout = async () => { try { await logout() } finally { localStorage.removeItem('restaurant-token'); setSessionUser(null); setDashboard(null); setSessionReady(true); setActiveNav('Vue d’ensemble') } }
 
   const renderView = () => {
     if (activeNav === 'Vue d’ensemble') return <DashboardView dashboard={dashboard} tables={tables} tableZones={tableZones} reservations={reservations} onNavigate={setActiveNav} onTableSelect={(id) => { setSelectedTable(id); setActiveNav('Prise de commande') }} />
@@ -116,7 +116,7 @@ function App() {
     if (activeNav === 'Approvisionnement') return <ModuleView title="Approvisionnement" description="Surveillez les seuils et mettez à jour les quantités." icon="□"><InventoryModule items={inventory} onUpdate={handleStock} /></ModuleView>
     if (activeNav === 'Finances') return <ModuleView title="Finances" description="Suivez les encaissements et le chiffre d’affaires du service." icon="€"><FinanceModule orders={dashboard?.orders || []} /></ModuleView>
       if (activeNav === 'Menu & plats') return <ModuleView title="Menu & plats" description="Créez vos plats, leurs prix et leurs photos." icon="♧"><MenuModule items={menu} onCreate={handleMenuItem} /></ModuleView>
-      if (!sessionUser) return <LoginScreen onLogin={(user, token) => { localStorage.setItem('restaurant-token', token); setSessionUser(user); setRole(user.role); setActiveNav(user.role === 'kitchen' ? 'Cuisine' : user.role === 'cashier' ? 'Caisse & paiements' : user.role === 'server' ? 'Prise de commande' : 'Vue d’ensemble'); setSessionReady(true); Promise.all([getDashboard(), getInventory(), getMenu()]).then(([data, stock, dishes]) => { previousOrderStatuses.current = Object.fromEntries(data.orders.map((order) => [order.id, order.status])); setDashboard(data); setInventory(stock); setMenu(dishes) }).catch(() => setApiError('Impossible de charger les données')) }} />
+      if (!sessionUser) return <LoginScreen onLogin={(user, token) => { localStorage.setItem('restaurant-token', token); setSessionUser(user); setRole(user.role); setActiveNav(user.role === 'kitchen' ? 'Cuisine' : user.role === 'cashier' ? 'Caisse & paiements' : user.role === 'server' ? 'Prise de commande' : 'Vue d’ensemble'); setSessionReady(true); Promise.all([getDashboard(), getInventory(), getMenu(), getStockWithdrawals()]).then(([data, stock, dishes, withdrawals]) => { previousOrderStatuses.current = Object.fromEntries(data.orders.map((order) => [order.id, order.status])); setDashboard(data); setInventory(stock); setMenu(dishes); setStockWithdrawals(withdrawals) }).catch(() => setApiError('Connexion établie, mais les données API sont indisponibles. Réessayez dans un instant.')) }} />
     return <ModuleView title="Paramètres" description="Contrôlez la session et les règles de votre établissement." icon="⚙"><SettingsModule user={sessionUser} onLogout={handleLogout} /></ModuleView>
   }
   if (!sessionReady) return <div className="session-loading">Vérification de la session...</div>
@@ -133,7 +133,7 @@ function App() {
       <div className="sidebar-footer"><div className="support-icon"><Bell size={17} /></div><div><strong>Besoin d’aide ?</strong><small>Centre de support</small></div><ArrowUpRight size={15} /></div>
     </aside>
     <main className="main-content">
-      <header className="topbar"><button className="mobile-menu-button" aria-label="Ouvrir le menu" onClick={() => setMobileNavOpen(!mobileNavOpen)}>☰</button><div className="breadcrumb"><button className="home-button" onClick={() => setActiveNav('Vue d’ensemble')}>Accueil</button><span className="dot">·</span><span>Bonjour {sessionUser.name}</span><span className="dot">·</span><span className="muted">Jeudi 24 septembre 2026</span></div><div className="top-actions"><button className="icon-button notification" aria-label="Notifications" onClick={() => { setAlertVisible(!alertVisible); setServerNotice('') }}><Bell size={19} />{(alertVisible || serverNotice) && <i />}</button><select className="role-select" aria-label="Rôle actif" value={role} onChange={(event) => switchRole(event.target.value as Role)}><option value="manager">Gérante</option><option value="server">Serveur</option><option value="kitchen">Cuisine</option><option value="cashier">Caissier</option></select><div className="profile"><span className="avatar profile-avatar">{sessionUser.name.slice(0, 2).toUpperCase()}</span><span><strong>{sessionUser.name}</strong><small>Session active</small></span><ChevronDown size={15} /></div><button className="logout-button" onClick={handleLogout}>Quitter</button></div></header>
+      <header className="topbar"><button className="mobile-menu-button" aria-label="Ouvrir le menu" onClick={() => setMobileNavOpen(!mobileNavOpen)}>☰</button><div className="breadcrumb"><button className="home-button" onClick={() => setActiveNav(role === 'manager' ? 'Vue d’ensemble' : role === 'kitchen' ? 'Cuisine' : role === 'cashier' ? 'Caisse & paiements' : 'Prise de commande')}>Accueil</button><span className="dot">·</span><span>Bonjour {sessionUser.name}</span><span className="dot">·</span><span className="muted">Jeudi 24 septembre 2026</span></div><div className="top-actions"><button className="icon-button notification" aria-label="Notifications" onClick={() => { setAlertVisible(!alertVisible); setServerNotice('') }}><Bell size={19} />{(alertVisible || serverNotice) && <i />}</button><div className="profile"><span className="avatar profile-avatar">{sessionUser.name.slice(0, 2).toUpperCase()}</span><span><strong>{sessionUser.name}</strong><small>{role === 'manager' ? 'Gérante' : role === 'server' ? 'Serveur' : role === 'kitchen' ? 'Cuisine' : 'Caissier'}</small></span></div><button className="logout-button" onClick={handleLogout}>Déconnexion</button></div></header>
       {apiError && <div className="api-error">{apiError}</div>}
       {serverNotice && <div className="server-notice"><Bell size={15} /><span>{serverNotice}</span><button onClick={() => setServerNotice('')} aria-label="Fermer">×</button></div>}
       {activeNav === 'Vue d’ensemble' && <div className="page-heading"><div><p className="eyebrow">JEUDI 24 SEPTEMBRE · SERVICE DU SOIR</p><h1>Vue d’ensemble</h1><p className="subtitle">Voici ce qui se passe dans votre restaurant aujourd’hui.</p></div><button className="primary-button" onClick={() => setShowAdd(true)}><Plus size={18} /> Nouvelle réservation</button></div>}
