@@ -49,6 +49,7 @@ export const logoutPlatform = () => request<void>('/platform/logout', { method: 
 export const getPlatformOverview = () => request<PlatformOverview>('/platform/overview')
 export const createSubscriptionPlan = (plan: { name: string; durationDays: number; price: number }) => request<SubscriptionPlan>('/platform/plans', { method: 'POST', body: JSON.stringify(plan) })
 export const createPlatformRestaurant = (restaurant: { identifier: string; name: string; password: string; managerUsername: string; managerName: string; managerPin: string; planId: string }) => request<ManagedRestaurant>('/platform/restaurants', { method: 'POST', body: JSON.stringify(restaurant) })
+export const updatePlatformRestaurant = (id: string, restaurant: { identifier: string; name: string; password?: string }) => request<ManagedRestaurant>(`/platform/restaurants/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(restaurant) })
 export const updateRestaurantSubscription = (id: string, update: { planId?: string; status: 'active' | 'suspended' }) => request<ManagedRestaurant>(`/platform/restaurants/${encodeURIComponent(id)}/subscription`, { method: 'PATCH', body: JSON.stringify(update) })
 export const getSession = () => request<Omit<Session, 'token'>>('/auth/me')
 export const logout = () => request<void>('/auth/logout', { method: 'POST' })

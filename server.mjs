@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto'
 import { promisify } from 'node:util'
-import { createInvoicePostgres, createProfilePostgres, createSubscriptionPlanPostgres, findRestaurantByIdentifier, findUserByCredentials, getInvoicePostgres, initPostgres, listManagedRestaurantsPostgres, listProfilesPostgres, listSubscriptionPlansPostgres, markInvoiceEmailed, readPostgres, registerRestaurantPostgres, savePostgres, updateRestaurantSubscriptionPostgres } from './db/postgres.mjs'
+import { createInvoicePostgres, createProfilePostgres, createSubscriptionPlanPostgres, findRestaurantByIdentifier, findUserByCredentials, getInvoicePostgres, initPostgres, listManagedRestaurantsPostgres, listProfilesPostgres, listSubscriptionPlansPostgres, markInvoiceEmailed, readPostgres, registerRestaurantPostgres, savePostgres, updateManagedRestaurantPostgres, updateRestaurantSubscriptionPostgres } from './db/postgres.mjs'
 import PDFDocument from 'pdfkit'
 import nodemailer from 'nodemailer'
 
@@ -354,6 +354,36 @@ const server = createServer(async (request, response) => {
       try { return send(response, 201, await provisionRestaurant({ identifier, name, password, managerUsername, managerName, managerPin }, plan)) }
       catch (error) {
         if (error.code === 'RESTAURANT_EXISTS' || error.code === '23505') return send(response, 409, { error: 'Cet identifiant restaurant ou nom d’utilisateur est déjà utilisé' })
+        throw error
+      }
+    }
+    if (url.pathname.startsWith('/api/platform/restaurants/') && request.method === 'PATCH' && !url.pathname.endsWith('/subscription')) {
+      if (!requirePlatformOwner(request, response)) return
+      const id = decodeURIComponent(url.pathname.slice('/api/platform/restaurants/'.length))
+      const input = await body(request)
+      const identifier = newRestaurantId(input.identifier)
+      const name = String(input.name || '').trim()
+      const password = String(input.password || '')
+      if (!validRestaurantIdentifier(identifier) || name.length < 2 || name.length > 100 || (password && (password.length < 8 || password.length > 128))) return send(response, 400, { error: 'Identifiant restaurant invalide, nom obligatoire ou mot de passe trop court (8 caractères minimum).' })
+      try {
+        let updated
+        if (usePostgres) updated = await updateManagedRestaurantPostgres(id, { identifier, name, passwordHash: password ? await hashPassword(password) : null })
+        else {
+          const credentials = await readTenantCredentials()
+          const restaurant = credentials.find((item) => item.id === id)
+          if (restaurant) {
+            if (credentials.some((item) => item.id !== id && item.identifier === identifier)) return send(response, 409, { error: 'Cet identifiant restaurant est déjà utilisé' })
+            restaurant.identifier = identifier
+            restaurant.name = name
+            if (password) restaurant.passwordHash = await hashPassword(password)
+            await writeTenantCredentials(credentials)
+            updated = restaurant
+          }
+        }
+        if (!updated) return send(response, 404, { error: 'Restaurant introuvable ou accès non configuré' })
+        return send(response, 200, (await getPlatformOverview()).restaurants.find((restaurant) => restaurant.id === id) || updated)
+      } catch (error) {
+        if (error.code === '23505') return send(response, 409, { error: 'Cet identifiant restaurant est déjà utilisé' })
         throw error
       }
     }

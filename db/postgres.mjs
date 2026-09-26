@@ -156,6 +156,11 @@ export async function listManagedRestaurantsPostgres() {
   return result.rows
 }
 
+export async function updateManagedRestaurantPostgres(id, { identifier, name, passwordHash }) {
+  const result = await pool.query('UPDATE restaurants SET identifier = $1, name = $2, password_hash = COALESCE($3, password_hash) WHERE id = $4 RETURNING id, identifier, name, (password_hash IS NOT NULL) AS "accessConfigured"', [identifier, name, passwordHash || null, id])
+  return result.rows[0] || null
+}
+
 export async function updateRestaurantSubscriptionPostgres(id, plan, status) {
   if (status === 'suspended') {
     const suspended = await pool.query('UPDATE restaurants SET subscription_status = $1 WHERE id = $2 RETURNING id, subscription_plan_id AS "planId", subscription_started_at AS "startedAt", subscription_expires_at AS "expiresAt", subscription_status AS status', [status, id])

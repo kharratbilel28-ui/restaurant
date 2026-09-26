@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import './App.css'
 import './modules.css'
+import { PlatformOwnerDashboard } from './PlatformOwnerDashboard'
 import { createDiningTable, createInvoice, createMenuItem, createOrder, createProfile, createReservation, createStockReceiptDraft, createStockWithdrawal, createPlatformRestaurant, createSubscriptionPlan, getDashboard, getFloorPlan, getHealth, getInventory, getMenu, getPlatformOverview, getPlatformSession, getProfiles, getRestaurantContext, getSession, getStockReceipts, getStockWithdrawals, login, loginPlatform, loginRestaurant, logout, logoutPlatform, logoutRestaurant, openCashDrawer, reviewStockReceipt, saveFloorPlan, sendInvoiceEmail, updateDiningTable, updateInventory, updateMenuItem, updateOrderStatus, updateRestaurantSubscription, type Dashboard, type FloorPlanConfig, type InventoryItem, type Invoice, type ManagedRestaurant, type MenuItem, type Order, type OrderLine, type PlatformOverview, type RestaurantContext, type RestaurantTable, type Role, type SessionUser, type StockReceipt, type StockReceiptLine, type StockWithdrawal, type TeamProfile } from './api'
 import type { InvoiceAnalysis } from './invoiceOcr'
 
@@ -460,7 +461,7 @@ function PlatformLoginScreen({ onLogin, onCancel }: { onLogin: (username: string
   return <div className="login-screen"><div className="login-card"><div className="brand login-brand"><span className="brand-mark"><Utensils size={18} /></span><span>Service<span className="brand-accent">Pilot</span></span></div><p className="eyebrow">ADMINISTRATION SAAS</p><h1>Portail propriétaire</h1><p className="login-subtitle">Accès réservé à l’administration de la plateforme.</p><label>Identifiant propriétaire<input autoCapitalize="none" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} /></label><label>Mot de passe<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && submit()} /></label>{error && <p className="login-error">{error}</p>}<button className="primary-button login-submit" disabled={loading || !username || !password} onClick={submit}>{loading ? 'Vérification...' : 'Ouvrir le portail'}</button><button className="switch-restaurant-button" onClick={onCancel}>Retour à la connexion restaurant</button></div></div>
 }
 
-function PlatformOwnerDashboard({ onLogout }: { onLogout: () => Promise<void> }) {
+export function PlatformOwnerDashboardLegacy({ onLogout }: { onLogout: () => Promise<void> }) {
   const [overview, setOverview] = useState<PlatformOverview | null>(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
