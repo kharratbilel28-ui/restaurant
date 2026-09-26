@@ -28,6 +28,34 @@ function readLocalSnapshot<T>(key: string): T | null {
   catch { return null }
 }
 
+type PwaInstallPromptEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }> }
+let queuedPwaInstallEvent: PwaInstallPromptEvent | null = null
+if (typeof window !== 'undefined') window.addEventListener('beforeinstallprompt', (event) => {
+  event.preventDefault()
+  queuedPwaInstallEvent = event as PwaInstallPromptEvent
+  window.dispatchEvent(new Event('pwa-install-ready'))
+})
+
+function PwaInstallPrompt({ installEvent, onInstalled }: { installEvent: PwaInstallPromptEvent | null; onInstalled: React.Dispatch<React.SetStateAction<PwaInstallPromptEvent | null>> }) {
+  const [dismissed, setDismissed] = useState(() => sessionStorage.getItem('pwa-install-dismissed') === '1')
+  const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent)
+  useEffect(() => {
+    const handleInstalled = () => { queuedPwaInstallEvent = null; onInstalled(null) }
+    window.addEventListener('appinstalled', handleInstalled)
+    return () => window.removeEventListener('appinstalled', handleInstalled)
+  }, [onInstalled])
+  const installed = window.matchMedia('(display-mode: standalone)').matches || (navigator as Navigator & { standalone?: boolean }).standalone === true
+  if (installed || dismissed || (!isIos && !installEvent)) return null
+  const dismiss = () => { sessionStorage.setItem('pwa-install-dismissed', '1'); setDismissed(true) }
+  const install = async () => {
+    if (!installEvent) return
+    await installEvent.prompt()
+    const choice = await installEvent.userChoice
+    if (choice.outcome === 'accepted') onInstalled(null)
+  }
+  return <aside className="pwa-install-prompt" aria-label="Installer ServicePilot"><div className="pwa-install-mark" aria-hidden="true">S</div><div className="pwa-install-copy"><strong>Ajouter ServicePilot à l’écran d’accueil</strong><span>{isIos ? 'Dans Safari : Partager, puis « Sur l’écran d’accueil ».' : 'Accède à la caisse et aux commandes comme à une application.'}</span></div><div className="pwa-install-actions">{installEvent && <button className="pwa-install-button" onClick={install}>Installer</button>}<button className="pwa-install-dismiss" onClick={dismiss} aria-label="Masquer la proposition">Plus tard</button></div></aside>
+}
+
 function App() {
   const [activeNav, setActiveNav] = useState('Vue d’ensemble')
   const [showAdd, setShowAdd] = useState(false)
@@ -40,6 +68,7 @@ function App() {
   const [profiles, setProfiles] = useState<TeamProfile[]>([])
   const [platformOwner, setPlatformOwner] = useState(false)
   const [platformLoginMode, setPlatformLoginMode] = useState(false)
+  const [pwaInstallEvent, setPwaInstallEvent] = useState<PwaInstallPromptEvent | null>(() => queuedPwaInstallEvent)
   const [networkOnline, setNetworkOnline] = useState(navigator.onLine)
   const [offlineQueue, setOfflineQueue] = useState({ pending: 0, failed: 0 })
   const [displayMode, setDisplayMode] = useState<DisplayMode>(() => localStorage.getItem('restaurant-display-mode') === 'low-light' ? 'low-light' : 'terrace')
@@ -59,6 +88,14 @@ function App() {
   const [printDocument, setPrintDocument] = useState<{ kind: 'ticket'; order: Order } | { kind: 'invoice'; invoice: Invoice } | null>(null)
   const previousOrderStatuses = useRef<Record<string, string>>({})
   const orderSubmissionInFlight = useRef(false)
+
+  useEffect(() => {
+    const handlePromptReady = () => setPwaInstallEvent(queuedPwaInstallEvent)
+    const handleAppInstalled = () => { queuedPwaInstallEvent = null; setPwaInstallEvent(null) }
+    window.addEventListener('pwa-install-ready', handlePromptReady)
+    window.addEventListener('appinstalled', handleAppInstalled)
+    return () => { window.removeEventListener('pwa-install-ready', handlePromptReady); window.removeEventListener('appinstalled', handleAppInstalled) }
+  }, [])
 
   useEffect(() => {
     if (localStorage.getItem('platform-token')) {
@@ -338,6 +375,7 @@ function App() {
       <div className="sidebar-footer"><div className="support-icon"><Bell size={17} /></div><div><strong>Besoin d’aide ?</strong><small>Centre de support</small></div><ArrowUpRight size={15} /></div>
     </aside>
     <main className="main-content">
+      <PwaInstallPrompt installEvent={pwaInstallEvent} onInstalled={setPwaInstallEvent} />
       {sessionUser && (!networkOnline || offlineQueue.pending > 0 || offlineQueue.failed > 0) && <div className={`offline-status ${!networkOnline ? 'is-offline' : offlineQueue.failed ? 'has-failures' : 'is-pending'}`} role="status" aria-live="polite"><strong>{!networkOnline ? 'Mode hors ligne' : offlineQueue.failed ? 'Synchronisation à vérifier' : 'Synchronisation en cours'}</strong><span>{!networkOnline ? `Consultation locale active · ${offlineQueue.pending} action(s) en attente d’envoi.` : offlineQueue.failed ? `${offlineQueue.failed} action(s) n’ont pas pu être synchronisées. Vérifie ta connexion et les permissions du profil.` : `${offlineQueue.pending} action(s) seront envoyées au restaurant.`}</span></div>}
       <div className="display-mode-control" role="group" aria-label="Mode d’affichage"><span>Affichage</span><button className={displayMode === 'terrace' ? 'selected' : ''} aria-pressed={displayMode === 'terrace'} onClick={() => setDisplayMode('terrace')}>Terrasse</button><button className={displayMode === 'low-light' ? 'selected' : ''} aria-pressed={displayMode === 'low-light'} onClick={() => setDisplayMode('low-light')}>Salle sombre</button></div>
       <header className="topbar"><button className="mobile-menu-button" aria-label="Ouvrir le menu" onClick={() => setMobileNavOpen(!mobileNavOpen)}>☰</button><div className="breadcrumb"><button className="home-button" onClick={() => setActiveNav(role === 'manager' ? 'Vue d’ensemble' : role === 'kitchen' ? 'Cuisine' : role === 'cashier' ? 'Caisse & paiements' : 'Prise de commande')}>Accueil</button><span className="dot">·</span><span>Bonjour {sessionUser.name}</span><span className="dot">·</span><span className="muted">Jeudi 24 septembre 2026</span></div><div className="top-actions"><div className="notification-wrap"><button className="icon-button notification" aria-label="Notifications" aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}><Bell size={19} />{notifications.some((item) => !item.read) && <i />}</button>{notificationsOpen && <section className="notification-panel" aria-label="Centre de notifications"><header className="notification-panel-header"><div><strong>Notifications</strong><span>{notifications.filter((item) => !item.read).length} non lue(s)</span></div><button onClick={() => setNotifications((items) => items.map((item) => ({ ...item, read: true })))}>Tout lire</button></header><div className="notification-list">{notifications.length ? notifications.map((item) => <button key={item.id} className={`notification-item ${item.read ? 'read' : 'unread'}`} onClick={() => { setNotifications((items) => items.map((current) => current.id === item.id ? { ...current, read: true } : current)); setActiveNav(item.target); setNotificationsOpen(false) }}><span className="notification-avatar"><Bell size={15} /></span><span className="notification-copy"><strong>{item.title}</strong><span>{item.message}</span><time>{formatNotificationTime(item.createdAt)}</time></span>{!item.read && <i className="unread-dot" />}</button>) : <p className="notification-empty">Vous êtes à jour. Aucune notification.</p>}</div></section>}</div><div className="profile"><span className="avatar profile-avatar">{sessionUser.name.slice(0, 2).toUpperCase()}</span><span><strong>{sessionUser.name}</strong><small>{role === 'manager' ? 'Gérante' : role === 'server' ? 'Serveur' : role === 'kitchen' ? 'Cuisine' : 'Caissier'}</small></span></div><button className="logout-button" onClick={handleLogout}>Déconnexion</button></div></header>
