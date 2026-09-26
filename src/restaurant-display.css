@@ -137,4 +137,7 @@ body { overflow-x: hidden; }
   .order-module > div { width: 100%; min-width: 0; padding: 24px 12px; }
   .order-module h2 { font-size: 20px; }
   .floor-map-canvas { max-width: calc(100% - 24px); }
+  .sidebar.mobile-open .sidebar-logout { display: block; width: 100%; min-height: 48px; padding: 10px 12px; margin: 12px 0 4px; border: 1px solid #b95a42; border-radius: 6px; color: #fff; background: #8f3529; text-align: left; font-size: 14px; font-weight: 700; }
 }
+.sidebar-logout { display: none; }
+:root[data-display-mode="low-light"] .sidebar-logout { color: #fff1ea; border-color: #b96d57; background: #713629; }
