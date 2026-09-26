@@ -16,13 +16,17 @@ export type SessionUser = { id: string; username?: string; name: string; role: R
 export type Session = { token: string; expiresAt: number; user: SessionUser }
 export type RestaurantContext = { id: string; identifier: string; name: string }
 export type TeamProfile = { id: string; username: string; name: string; role: Role }
+export type SubscriptionPlan = { id: string; name: string; durationDays: number; price: number; currency: string; active: boolean }
+export type ManagedRestaurant = { id: string; identifier: string; name: string; planId: string | null; planName: string | null; startedAt: string | null; expiresAt: string | null; status: 'active' | 'suspended'; accessConfigured: boolean }
+export type PlatformOverview = { restaurants: ManagedRestaurant[]; plans: SubscriptionPlan[] }
 
 const apiUrl = import.meta.env.VITE_API_URL || '/api'
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const token = localStorage.getItem('restaurant-token')
   const accessToken = localStorage.getItem('restaurant-access-token')
-  const response = await fetch(`${apiUrl}${path}`, { headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(accessToken ? { 'X-Restaurant-Access': accessToken } : {}) }, ...options })
+  const platformToken = localStorage.getItem('platform-token')
+  const response = await fetch(`${apiUrl}${path}`, { headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(accessToken ? { 'X-Restaurant-Access': accessToken } : {}), ...(platformToken ? { 'X-Platform-Access': platformToken } : {}) }, ...options })
   if (!response.ok) {
     if (response.status === 401) localStorage.removeItem('restaurant-token')
     throw new Error((await response.json()).error || 'Erreur API')
@@ -33,13 +37,19 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const getDashboard = () => request<Dashboard>('/dashboard')
 export const getHealth = () => request<{ ok: boolean; service: string; storage: 'postgresql' | 'local-json' }>('/health')
-export const registerRestaurant = (input: { identifier: string; name: string; password: string; managerUsername: string; managerName: string; managerPin: string }) => request<{ token: string; restaurant: RestaurantContext }>('/auth/register-restaurant', { method: 'POST', body: JSON.stringify(input) })
 export const loginRestaurant = (identifier: string, password: string) => request<{ token: string; restaurant: RestaurantContext }>('/auth/restaurant', { method: 'POST', body: JSON.stringify({ identifier, password }) })
 export const getRestaurantContext = () => request<{ restaurant: RestaurantContext }>('/auth/restaurant')
 export const logoutRestaurant = () => request<void>('/auth/restaurant', { method: 'DELETE' })
 export const getProfiles = () => request<TeamProfile[]>('/auth/profiles')
 export const createProfile = (profile: { username: string; name: string; role: Role; pin: string }) => request<TeamProfile>('/profiles', { method: 'POST', body: JSON.stringify(profile) })
 export const login = (username: string, pin: string) => request<Session>('/auth/login', { method: 'POST', body: JSON.stringify({ username, pin }) })
+export const loginPlatform = (username: string, password: string) => request<{ token: string; owner: { name: string } }>('/platform/login', { method: 'POST', body: JSON.stringify({ username, password }) })
+export const getPlatformSession = () => request<{ owner: { name: string }; expiresAt: number }>('/platform/me')
+export const logoutPlatform = () => request<void>('/platform/logout', { method: 'POST' })
+export const getPlatformOverview = () => request<PlatformOverview>('/platform/overview')
+export const createSubscriptionPlan = (plan: { name: string; durationDays: number; price: number }) => request<SubscriptionPlan>('/platform/plans', { method: 'POST', body: JSON.stringify(plan) })
+export const createPlatformRestaurant = (restaurant: { identifier: string; name: string; password: string; managerUsername: string; managerName: string; managerPin: string; planId: string }) => request<ManagedRestaurant>('/platform/restaurants', { method: 'POST', body: JSON.stringify(restaurant) })
+export const updateRestaurantSubscription = (id: string, update: { planId?: string; status: 'active' | 'suspended' }) => request<ManagedRestaurant>(`/platform/restaurants/${encodeURIComponent(id)}/subscription`, { method: 'PATCH', body: JSON.stringify(update) })
 export const getSession = () => request<Omit<Session, 'token'>>('/auth/me')
 export const logout = () => request<void>('/auth/logout', { method: 'POST' })
 export const createReservation = (reservation: { name: string; time: string; people: number; table?: string }) => request<Reservation>('/reservations', { method: 'POST', body: JSON.stringify(reservation) })

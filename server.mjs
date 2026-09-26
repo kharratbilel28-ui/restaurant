@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto'
 import { promisify } from 'node:util'
-import { createInvoicePostgres, createProfilePostgres, findRestaurantByIdentifier, findUserByCredentials, getInvoicePostgres, initPostgres, listProfilesPostgres, markInvoiceEmailed, readPostgres, registerRestaurantPostgres, savePostgres } from './db/postgres.mjs'
+import { createInvoicePostgres, createProfilePostgres, createSubscriptionPlanPostgres, findRestaurantByIdentifier, findUserByCredentials, getInvoicePostgres, initPostgres, listManagedRestaurantsPostgres, listProfilesPostgres, listSubscriptionPlansPostgres, markInvoiceEmailed, readPostgres, registerRestaurantPostgres, savePostgres, updateRestaurantSubscriptionPostgres } from './db/postgres.mjs'
 import PDFDocument from 'pdfkit'
 import nodemailer from 'nodemailer'
 
@@ -12,18 +12,31 @@ const root = dirname(fileURLToPath(import.meta.url))
 const databasePath = resolve(root, 'db/restaurant.json')
 const tenantCredentialsPath = resolve(root, 'db/tenant-credentials.json')
 const tenantDatabaseDirectory = resolve(root, 'db/tenants')
+const subscriptionPlansPath = resolve(root, 'db/subscription-plans.json')
 const port = Number(process.env.PORT || process.env.API_PORT || 8787)
 const sessionDurationMs = 8 * 60 * 60 * 1000
 const sessions = new Map()
 const restaurantAccessSessions = new Map()
+const platformSessions = new Map()
 const receiptReviewsInProgress = new Set()
 const scrypt = promisify(scryptCallback)
 let invoiceCreationQueue = Promise.resolve()
 const usePostgres = Boolean(process.env.DATABASE_URL)
 const defaultRestaurantId = 'restaurant-demo'
+const defaultSubscriptionPlans = [
+  { id: 'trial-14', name: 'Essai 14 jours', durationDays: 14, price: 0, currency: 'EUR', active: true },
+  { id: 'monthly-30', name: 'Mensuel', durationDays: 30, price: 29, currency: 'EUR', active: true },
+  { id: 'annual-365', name: 'Annuel', durationDays: 365, price: 290, currency: 'EUR', active: true },
+]
 
 function databasePathFor(restaurantId) { return restaurantId === defaultRestaurantId ? databasePath : resolve(tenantDatabaseDirectory, `${restaurantId}.json`) }
 function newRestaurantId(value) { return String(value || '').trim().toLowerCase() }
+function validRestaurantIdentifier(value) {
+  if (value.length > 254) return false
+  const slug = /^[a-z0-9][a-z0-9-]{2,39}$/
+  const email = /^[a-z0-9.!#$%&'*+?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/
+  return slug.test(value) || email.test(value)
+}
 
 async function hashPassword(password) {
   const salt = randomBytes(16)
@@ -46,6 +59,115 @@ async function readTenantCredentials() {
 
 async function writeTenantCredentials(credentials) {
   await writeFile(tenantCredentialsPath, JSON.stringify(credentials, null, 2) + '\n')
+}
+
+async function readSubscriptionPlans() {
+  if (usePostgres) return listSubscriptionPlansPostgres()
+  try { return JSON.parse(await readFile(subscriptionPlansPath, 'utf8')) }
+  catch (error) { if (error.code === 'ENOENT') return defaultSubscriptionPlans; throw error }
+}
+
+async function writeSubscriptionPlans(plans) {
+  await writeFile(subscriptionPlansPath, JSON.stringify(plans, null, 2) + '\n')
+}
+
+function safeEqualStrings(left, right) {
+  const leftBuffer = Buffer.from(String(left || ''))
+  const rightBuffer = Buffer.from(String(right || ''))
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer)
+}
+
+async function provisionRestaurant({ identifier, name, password, managerUsername, managerName, managerPin }, plan) {
+  const passwordHash = await hashPassword(password)
+  const startedAt = new Date()
+  const expiresAt = new Date(startedAt.getTime() + plan.durationDays * 24 * 60 * 60 * 1000)
+  const manager = { id: `user-${randomUUID()}`, username: managerUsername, name: managerName, role: 'manager', pin: managerPin }
+  if (usePostgres) {
+    const restaurant = await registerRestaurantPostgres({ id: identifier, identifier, name, passwordHash, manager, planId: plan.id, startedAt, expiresAt })
+    return { ...restaurant, planId: plan.id, planName: plan.name, startedAt, expiresAt, status: 'active', accessConfigured: true }
+  }
+  const credentials = await readTenantCredentials()
+  if (credentials.some((item) => item.identifier === identifier)) {
+    const error = new Error('Cet identifiant restaurant est déjà utilisé')
+    error.code = 'RESTAURANT_EXISTS'
+    throw error
+  }
+  const path = databasePathFor(identifier)
+  let existingState = null
+  try { existingState = JSON.parse(await readFile(path, 'utf8')) } catch (error) { if (error.code !== 'ENOENT') throw error }
+  if (identifier === defaultRestaurantId) {
+    const state = await readDatabase(identifier)
+    if (state.users.some((user) => (user.username || user.id).toLowerCase() === managerUsername)) {
+      const error = new Error('Ce nom d’utilisateur existe déjà dans ce restaurant')
+      error.code = '23505'
+      throw error
+    }
+    state.users.push(manager)
+    await saveDatabase(state, identifier)
+  } else {
+    if (existingState) {
+      const error = new Error('Un espace existe déjà sous cet identifiant; contactez le support.')
+      error.code = 'RESTAURANT_EXISTS'
+      throw error
+    }
+    const state = { reservations: [], users: [manager], orders: [], tables: [], inventory: [], menu: [], stockWithdrawals: [], stockReceipts: [], invoices: [], invoiceCounters: {}, floorPlan: null }
+    await mkdir(tenantDatabaseDirectory, { recursive: true })
+    await writeFile(path, JSON.stringify(state, null, 2) + '\n')
+  }
+  credentials.push({ id: identifier, identifier, name, passwordHash, planId: plan.id, planName: plan.name, startedAt: startedAt.toISOString(), expiresAt: expiresAt.toISOString(), status: 'active' })
+  await writeTenantCredentials(credentials)
+  return { id: identifier, identifier, name, planId: plan.id, planName: plan.name, startedAt: startedAt.toISOString(), expiresAt: expiresAt.toISOString(), status: 'active', accessConfigured: true }
+}
+
+async function getPlatformOverview() {
+  const plans = await readSubscriptionPlans()
+  let restaurants
+  if (usePostgres) restaurants = await listManagedRestaurantsPostgres()
+  else {
+    const credentials = await readTenantCredentials()
+    restaurants = credentials.map(({ passwordHash, ...item }) => ({ ...item, planName: plans.find((plan) => plan.id === item.planId)?.name || null, startedAt: item.startedAt || null, expiresAt: item.expiresAt || null, status: item.status || 'active', accessConfigured: true }))
+    if (!restaurants.some((item) => item.id === defaultRestaurantId)) restaurants.push({ id: defaultRestaurantId, identifier: defaultRestaurantId, name: 'Le Mijoté', planId: null, planName: null, startedAt: null, expiresAt: null, status: 'active', accessConfigured: false })
+  }
+  return { restaurants, plans }
+}
+
+async function setRestaurantSubscription(id, plan, status) {
+  if (usePostgres) return updateRestaurantSubscriptionPostgres(id, plan, status)
+  const credentials = await readTenantCredentials()
+  const restaurant = credentials.find((item) => item.id === id)
+  if (!restaurant) return null
+  if (status === 'suspended') restaurant.status = 'suspended'
+  else {
+    const startedAt = new Date()
+    restaurant.planId = plan.id
+    restaurant.planName = plan.name
+    restaurant.startedAt = startedAt.toISOString()
+    restaurant.expiresAt = new Date(startedAt.getTime() + plan.durationDays * 86400000).toISOString()
+    restaurant.status = 'active'
+  }
+  await writeTenantCredentials(credentials)
+  return { id, planId: restaurant.planId, planName: restaurant.planName, startedAt: restaurant.startedAt, expiresAt: restaurant.expiresAt, status: restaurant.status }
+}
+
+function platformSessionFrom(request) {
+  const token = request.headers['x-platform-access'] || ''
+  const session = platformSessions.get(token)
+  if (!session || session.expiresAt <= Date.now()) {
+    platformSessions.delete(token)
+    return null
+  }
+  return { token, ...session }
+}
+
+function requirePlatformOwner(request, response) {
+  const session = platformSessionFrom(request)
+  if (!session) { send(response, 401, { error: 'Session propriétaire absente ou expirée' }); return null }
+  return session
+}
+
+function revokeRestaurantSessions(restaurantId) {
+  for (const [token, session] of restaurantAccessSessions) if (session.restaurantId === restaurantId) restaurantAccessSessions.delete(token)
+  for (const [token, session] of sessions) if (session.restaurantId === restaurantId) sessions.delete(token)
 }
 
 async function readDatabase(restaurantId = defaultRestaurantId) {
@@ -82,7 +204,7 @@ async function saveDatabase(database, restaurantId = defaultRestaurantId) {
 }
 
 function send(response, status, payload) {
-  response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': 'http://localhost:5173', 'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Restaurant-Access', 'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS' })
+  response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': 'http://localhost:5173', 'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Restaurant-Access, X-Platform-Access', 'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS' })
   response.end(JSON.stringify(payload))
 }
 
@@ -106,7 +228,7 @@ function sessionFrom(request) {
   if (!value.startsWith('Bearer ')) return null
   const token = value.slice(7)
   const session = sessions.get(token)
-  if (!session || session.expiresAt <= Date.now()) {
+  if (!session || session.expiresAt <= Date.now() || session.subscriptionStatus === 'suspended' || (session.subscriptionExpiresAt && new Date(session.subscriptionExpiresAt).getTime() <= Date.now())) {
     sessions.delete(token)
     return null
   }
@@ -116,7 +238,7 @@ function sessionFrom(request) {
 function restaurantAccessFrom(request) {
   const token = request.headers['x-restaurant-access'] || ''
   const session = restaurantAccessSessions.get(token)
-  if (!session || session.expiresAt <= Date.now()) {
+  if (!session || session.expiresAt <= Date.now() || session.subscriptionStatus === 'suspended' || (session.subscriptionExpiresAt && new Date(session.subscriptionExpiresAt).getTime() <= Date.now())) {
     restaurantAccessSessions.delete(token)
     return null
   }
@@ -174,51 +296,81 @@ const server = createServer(async (request, response) => {
   const url = new URL(request.url || '/', `http://${request.headers.host}`)
   try {
     if (url.pathname === '/api/health') return send(response, 200, { ok: true, service: 'restaurant-api', storage: usePostgres ? 'postgresql' : 'local-json' })
-    if (url.pathname === '/api/auth/register-restaurant' && request.method === 'POST') {
+    if (url.pathname === '/api/platform/login' && request.method === 'POST') {
+      if (!process.env.PLATFORM_OWNER_USERNAME || !process.env.PLATFORM_OWNER_PASSWORD) return send(response, 503, { error: 'Configurez PLATFORM_OWNER_USERNAME et PLATFORM_OWNER_PASSWORD dans l’environnement du serveur.' })
+      const input = await body(request)
+      if (!safeEqualStrings(input.username, process.env.PLATFORM_OWNER_USERNAME) || !safeEqualStrings(input.password, process.env.PLATFORM_OWNER_PASSWORD)) return send(response, 401, { error: 'Identifiants propriétaire incorrects' })
+      const token = randomUUID()
+      const expiresAt = Date.now() + sessionDurationMs
+      platformSessions.set(token, { name: 'Propriétaire plateforme', expiresAt })
+      return send(response, 200, { token, expiresAt, owner: { name: 'Propriétaire plateforme' } })
+    }
+    if (url.pathname === '/api/platform/me' && request.method === 'GET') {
+      const owner = requirePlatformOwner(request, response)
+      return owner && send(response, 200, { owner: { name: owner.name }, expiresAt: owner.expiresAt })
+    }
+    if (url.pathname === '/api/platform/logout' && request.method === 'POST') {
+      const owner = platformSessionFrom(request)
+      if (owner) platformSessions.delete(owner.token)
+      return send(response, 204, {})
+    }
+    if (url.pathname === '/api/platform/overview' && request.method === 'GET') {
+      if (!requirePlatformOwner(request, response)) return
+      return send(response, 200, await getPlatformOverview())
+    }
+    if (url.pathname === '/api/platform/plans' && request.method === 'POST') {
+      if (!requirePlatformOwner(request, response)) return
+      const input = await body(request)
+      const name = String(input.name || '').trim()
+      const durationDays = Number(input.durationDays)
+      const price = Number(input.price)
+      const id = String(input.id || name.toLowerCase().replace(/[^a-z0-9]+/g, '-')).replace(/^-|-$/g, '')
+      if (!/^[a-z0-9][a-z0-9-]{1,39}$/.test(id) || name.length < 2 || name.length > 60 || !Number.isInteger(durationDays) || durationDays < 1 || durationDays > 3650 || !Number.isFinite(price) || price < 0 || price > 100000) return send(response, 400, { error: 'Renseignez un nom, une durée entre 1 et 3650 jours et un prix valide.' })
+      const plan = { id, name, durationDays, price: money(price), currency: 'EUR', active: true }
+      try {
+        if (usePostgres) return send(response, 201, await createSubscriptionPlanPostgres(plan))
+        const plans = await readSubscriptionPlans()
+        if (plans.some((existing) => existing.id === id || existing.name.toLowerCase() === name.toLowerCase())) return send(response, 409, { error: 'Une offre porte déjà cet identifiant ou ce nom' })
+        plans.push(plan)
+        await writeSubscriptionPlans(plans)
+        return send(response, 201, plan)
+      } catch (error) {
+        if (error.code === '23505') return send(response, 409, { error: 'Une offre porte déjà cet identifiant ou ce nom' })
+        throw error
+      }
+    }
+    if (url.pathname === '/api/platform/restaurants' && request.method === 'POST') {
+      if (!requirePlatformOwner(request, response)) return
       const input = await body(request)
       const identifier = newRestaurantId(input.identifier)
       const name = String(input.name || '').trim()
       const password = String(input.password || '')
-      const username = String(input.managerUsername || '').trim().toLowerCase()
-      const managerName = String(input.managerName || username).trim()
-      const pin = String(input.managerPin || '')
-      if (!/^[a-z0-9][a-z0-9-]{2,39}$/.test(identifier) || name.length < 2 || name.length > 100 || password.length < 8 || password.length > 128 || !/^[a-z0-9._-]{3,32}$/.test(username) || managerName.length < 2 || managerName.length > 80 || !/^\d{4,12}$/.test(pin)) return send(response, 400, { error: 'Vérifiez l’identifiant (3-40 caractères), le nom, le mot de passe (8 caractères minimum), le compte gérant et son code PIN (4-12 chiffres).' })
-      const passwordHash = await hashPassword(password)
-      const manager = { id: `user-${randomUUID()}`, username, name: managerName, role: 'manager', pin }
-      try {
-        let restaurant
-        if (usePostgres) {
-          restaurant = await registerRestaurantPostgres({ id: identifier, identifier, name, passwordHash, manager })
-        } else {
-          const credentials = await readTenantCredentials()
-          if (credentials.some((item) => item.identifier === identifier)) return send(response, 409, { error: 'Cet identifiant restaurant est déjà utilisé' })
-          const path = databasePathFor(identifier)
-          let existingState = null
-          try { existingState = JSON.parse(await readFile(path, 'utf8')) } catch (error) { if (error.code !== 'ENOENT') throw error }
-          if (identifier === defaultRestaurantId) {
-            const state = await readDatabase(identifier)
-            if (state.users.some((user) => (user.username || user.id).toLowerCase() === username)) return send(response, 409, { error: 'Ce nom d’utilisateur existe déjà dans ce restaurant' })
-            state.users.push(manager)
-            await saveDatabase(state, identifier)
-          } else {
-            if (existingState) return send(response, 409, { error: 'Un espace existe déjà sous cet identifiant; contactez le support.' })
-            const state = { reservations: [], users: [manager], orders: [], tables: [], inventory: [], menu: [], stockWithdrawals: [], stockReceipts: [], invoices: [], invoiceCounters: {}, floorPlan: null }
-            await mkdir(tenantDatabaseDirectory, { recursive: true })
-            await writeFile(path, JSON.stringify(state, null, 2) + '\n')
-          }
-          credentials.push({ id: identifier, identifier, name, passwordHash })
-          await writeTenantCredentials(credentials)
-          restaurant = { id: identifier, identifier, name }
-        }
-        const token = randomUUID()
-        const expiresAt = Date.now() + sessionDurationMs
-        restaurantAccessSessions.set(token, { restaurantId: restaurant.id, name: restaurant.name, identifier: restaurant.identifier, expiresAt })
-        return send(response, 201, { token, expiresAt, restaurant })
-      } catch (error) {
+      const managerUsername = String(input.managerUsername || '').trim().toLowerCase()
+      const managerName = String(input.managerName || '').trim()
+      const managerPin = String(input.managerPin || '')
+      if (!validRestaurantIdentifier(identifier) || name.length < 2 || name.length > 100 || password.length < 8 || password.length > 128 || !/^[a-z0-9._-]{3,32}$/.test(managerUsername) || managerName.length < 2 || managerName.length > 80 || !/^\d{4,12}$/.test(managerPin)) return send(response, 400, { error: 'Identifiant restaurant invalide (slug ou adresse e-mail), ou vérifiez les informations du premier gérant.' })
+      const plan = (await readSubscriptionPlans()).find((item) => item.id === input.planId && item.active)
+      if (!plan) return send(response, 400, { error: 'Choisissez une offre active avant de créer le restaurant.' })
+      try { return send(response, 201, await provisionRestaurant({ identifier, name, password, managerUsername, managerName, managerPin }, plan)) }
+      catch (error) {
         if (error.code === 'RESTAURANT_EXISTS' || error.code === '23505') return send(response, 409, { error: 'Cet identifiant restaurant ou nom d’utilisateur est déjà utilisé' })
         throw error
       }
     }
+    if (url.pathname.startsWith('/api/platform/restaurants/') && url.pathname.endsWith('/subscription') && request.method === 'PATCH') {
+      if (!requirePlatformOwner(request, response)) return
+      const id = decodeURIComponent(url.pathname.split('/').at(-2))
+      const input = await body(request)
+      const status = input.status === 'suspended' ? 'suspended' : 'active'
+      const plan = (await readSubscriptionPlans()).find((item) => item.id === input.planId && item.active)
+      if (status === 'active' && !plan) return send(response, 400, { error: 'Choisissez une offre active pour attribuer ou renouveler la licence.' })
+      const updated = await setRestaurantSubscription(id, plan, status)
+      if (!updated) return send(response, 404, { error: 'Restaurant introuvable ou accès initial à configurer' })
+      if (status === 'suspended') revokeRestaurantSessions(id)
+      const refreshed = (await getPlatformOverview()).restaurants.find((restaurant) => restaurant.id === id)
+      return send(response, 200, refreshed || updated)
+    }
+    if (url.pathname === '/api/auth/register-restaurant' && request.method === 'POST') return send(response, 403, { error: 'La création des restaurants est réservée au portail propriétaire' })
     if (url.pathname === '/api/auth/restaurant' && request.method === 'POST') {
       const input = await body(request)
       const identifier = newRestaurantId(input.identifier)
@@ -226,9 +378,12 @@ const server = createServer(async (request, response) => {
         ? await findRestaurantByIdentifier(identifier)
         : (await readTenantCredentials()).find((item) => item.identifier === identifier)
       if (!record || !await verifyPassword(String(input.password || ''), record.passwordHash)) return send(response, 401, { error: 'Identifiant restaurant ou mot de passe incorrect' })
+      const subscriptionStatus = record.status || 'active'
+      const subscriptionExpiresAt = record.expiresAt || null
+      if (subscriptionStatus !== 'active' || (subscriptionExpiresAt && new Date(subscriptionExpiresAt).getTime() <= Date.now())) return send(response, 403, { error: 'Licence suspendue ou expirée. Contactez le propriétaire de l’application.' })
       const token = randomUUID()
-      const expiresAt = Date.now() + sessionDurationMs
-      restaurantAccessSessions.set(token, { restaurantId: record.id, name: record.name, identifier, expiresAt })
+      const expiresAt = Math.min(Date.now() + sessionDurationMs, subscriptionExpiresAt ? new Date(subscriptionExpiresAt).getTime() : Infinity)
+      restaurantAccessSessions.set(token, { restaurantId: record.id, name: record.name, identifier, subscriptionStatus, subscriptionExpiresAt, expiresAt })
       return send(response, 200, { token, expiresAt, restaurant: { id: record.id, identifier, name: record.name } })
     }
     if (url.pathname === '/api/auth/restaurant' && request.method === 'GET') {
@@ -260,7 +415,7 @@ const server = createServer(async (request, response) => {
       const token = randomUUID()
       const expiresAt = Date.now() + sessionDurationMs
       const restaurantId = access.restaurantId
-      sessions.set(token, { userId: user.id, name: user.name, role: user.role, restaurantId, expiresAt })
+      sessions.set(token, { userId: user.id, name: user.name, role: user.role, restaurantId, subscriptionStatus: access.subscriptionStatus, subscriptionExpiresAt: access.subscriptionExpiresAt, expiresAt: Math.min(expiresAt, access.expiresAt) })
       return send(response, 200, { token, expiresAt, user: { id: user.id, username: user.username || user.id, name: user.name, role: user.role } })
     }
     if (url.pathname === '/api/auth/me' && request.method === 'GET') {

@@ -26,3 +26,4 @@ dist-ssr
 # Local multi-tenant credentials and data
 db/tenant-credentials.json
 db/tenants/
+db/subscription-plans.json

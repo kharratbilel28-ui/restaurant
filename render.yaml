@@ -13,6 +13,10 @@ services:
         fromDatabase:
           name: restaurant-db
           property: connectionString
+      - key: PLATFORM_OWNER_USERNAME
+        sync: false
+      - key: PLATFORM_OWNER_PASSWORD
+        sync: false
 
 databases:
   - name: restaurant-db

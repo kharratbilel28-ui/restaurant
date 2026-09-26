@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import './App.css'
 import './modules.css'
-import { createDiningTable, createInvoice, createMenuItem, createOrder, createProfile, createReservation, createStockReceiptDraft, createStockWithdrawal, getDashboard, getFloorPlan, getHealth, getInventory, getMenu, getProfiles, getRestaurantContext, getSession, getStockReceipts, getStockWithdrawals, login, loginRestaurant, logout, logoutRestaurant, openCashDrawer, registerRestaurant, reviewStockReceipt, saveFloorPlan, sendInvoiceEmail, updateDiningTable, updateInventory, updateMenuItem, updateOrderStatus, type Dashboard, type FloorPlanConfig, type InventoryItem, type Invoice, type MenuItem, type Order, type OrderLine, type RestaurantContext, type RestaurantTable, type Role, type SessionUser, type StockReceipt, type StockReceiptLine, type StockWithdrawal, type TeamProfile } from './api'
+import { createDiningTable, createInvoice, createMenuItem, createOrder, createProfile, createReservation, createStockReceiptDraft, createStockWithdrawal, createPlatformRestaurant, createSubscriptionPlan, getDashboard, getFloorPlan, getHealth, getInventory, getMenu, getPlatformOverview, getPlatformSession, getProfiles, getRestaurantContext, getSession, getStockReceipts, getStockWithdrawals, login, loginPlatform, loginRestaurant, logout, logoutPlatform, logoutRestaurant, openCashDrawer, reviewStockReceipt, saveFloorPlan, sendInvoiceEmail, updateDiningTable, updateInventory, updateMenuItem, updateOrderStatus, updateRestaurantSubscription, type Dashboard, type FloorPlanConfig, type InventoryItem, type Invoice, type ManagedRestaurant, type MenuItem, type Order, type OrderLine, type PlatformOverview, type RestaurantContext, type RestaurantTable, type Role, type SessionUser, type StockReceipt, type StockReceiptLine, type StockWithdrawal, type TeamProfile } from './api'
 import type { InvoiceAnalysis } from './invoiceOcr'
 
 type IconProps = { size?: number }
@@ -30,6 +30,8 @@ function App() {
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(null)
   const [restaurantContext, setRestaurantContext] = useState<RestaurantContext | null>(null)
   const [profiles, setProfiles] = useState<TeamProfile[]>([])
+  const [platformOwner, setPlatformOwner] = useState(false)
+  const [platformLoginMode, setPlatformLoginMode] = useState(false)
   const [sessionReady, setSessionReady] = useState(false)
   const [inventory, setInventory] = useState<InventoryItem[]>([])
   const [selectedTable, setSelectedTable] = useState('')
@@ -48,6 +50,10 @@ function App() {
   const orderSubmissionInFlight = useRef(false)
 
   useEffect(() => {
+    if (localStorage.getItem('platform-token')) {
+      getPlatformSession().then(() => setPlatformOwner(true)).catch(() => localStorage.removeItem('platform-token')).finally(() => setSessionReady(true))
+      return
+    }
     const token = localStorage.getItem('restaurant-token')
     const accessToken = localStorage.getItem('restaurant-access-token')
     if (!token) {
@@ -185,7 +191,18 @@ function App() {
     setProfiles(availableProfiles)
   }
   const handleRestaurantLogin = async (identifier: string, password: string) => acceptRestaurant(await loginRestaurant(identifier, password))
-  const handleRestaurantRegister = async (input: { identifier: string; name: string; password: string; managerUsername: string; managerName: string; managerPin: string }) => acceptRestaurant(await registerRestaurant(input))
+  const handlePlatformLogin = async (username: string, password: string) => {
+    const session = await loginPlatform(username, password)
+    localStorage.setItem('platform-token', session.token)
+    localStorage.removeItem('restaurant-token')
+    localStorage.removeItem('restaurant-access-token')
+    setRestaurantContext(null); setSessionUser(null); setDashboard(null); setPlatformLoginMode(false); setPlatformOwner(true)
+  }
+  const handlePlatformLogout = async () => {
+    await Promise.allSettled([logoutPlatform()])
+    localStorage.removeItem('platform-token')
+    setPlatformOwner(false); setPlatformLoginMode(false); setSessionReady(true)
+  }
   const handleTeamLogin = async (user: SessionUser, token: string) => {
     localStorage.setItem('restaurant-token', token)
     setSessionUser(user)
@@ -208,7 +225,7 @@ function App() {
 
   const authView = restaurantContext
     ? <LoginScreen restaurant={restaurantContext} profiles={profiles} onLogin={async (username, pin) => { const session = await login(username, pin); await handleTeamLogin(session.user, session.token) }} onSwitchRestaurant={handleRestaurantLogout} />
-    : <RestaurantAccessScreen onLogin={handleRestaurantLogin} onRegister={handleRestaurantRegister} />
+    : <RestaurantAccessScreenV2 onLogin={handleRestaurantLogin} onPlatformAccess={() => setPlatformLoginMode(true)} />
 
   const renderView = () => {
     if (activeNav === 'Vue d’ensemble') return <DashboardView dashboard={dashboard} tables={tables} tableZones={tableZones} reservations={reservations} onNavigate={setActiveNav} onTableSelect={(id) => { setSelectedTable(id); setActiveNav('Prise de commande') }} />
@@ -225,6 +242,8 @@ function App() {
     return <ModuleView title="Paramètres & configuration" description="Gérez les plats, les profils, les tables et le plan de salle." icon="⚙"><SettingsModule user={sessionUser} onLogout={handleLogout} onSwitchRestaurant={handleRestaurantLogout} menu={menu} onCreateMenuItem={handleMenuItem} onUpdateMenuItem={handleMenuUpdate} tables={tables} onCreateTable={handleTableCreate} onUpdateTable={handleTableUpdate} profiles={profiles} onCreateProfile={handleCreateProfile} floorPlan={floorPlan} onSaveFloorPlan={handleFloorPlanSave} storageMode={storageMode} /></ModuleView>
   }
   if (!sessionReady) return <div className="session-loading">Vérification de la session...</div>
+  if (platformOwner) return <PlatformOwnerDashboard onLogout={handlePlatformLogout} />
+  if (platformLoginMode) return <PlatformLoginScreen onLogin={handlePlatformLogin} onCancel={() => setPlatformLoginMode(false)} />
   if (!sessionUser) return authView
   return <div className="app-shell">
     <aside className={`sidebar ${mobileNavOpen ? 'mobile-open' : ''}`}>
@@ -389,7 +408,7 @@ function FloorPlanConfiguration({ tables, floorPlan, onSave }: { tables: Restaur
     {draft ? <><p className="floor-config-help">{placingTableId ? `Touchez un emplacement pour déplacer ${placingTableId}.` : 'Importez le plan de référence, puis choisissez une table à déplacer.'}</p><FloorPlan tables={tables} tableZones={[...new Set(tables.map((table) => table.zone))]} onSelect={setPlacingTableId} background={draft} positions={draft.positions} placingTableId={placingTableId} onPlace={(id, point) => { setDraft((current) => current ? { ...current, positions: { ...current.positions, [id]: point } } : current); setPlacingTableId('') }} /></> : <p className="floor-config-empty">Importez le plan existant pour créer et enregistrer sa version graphique.</p>}
   </section>
 }
-function RestaurantAccessScreen({ onLogin, onRegister }: { onLogin: (identifier: string, password: string) => Promise<void>; onRegister: (input: { identifier: string; name: string; password: string; managerUsername: string; managerName: string; managerPin: string }) => Promise<void> }) {
+export function RestaurantAccessScreen({ onLogin, onRegister }: { onLogin: (identifier: string, password: string) => Promise<void>; onRegister: (input: { identifier: string; name: string; password: string; managerUsername: string; managerName: string; managerPin: string }) => Promise<void> }) {
   const [registering, setRegistering] = useState(false)
   const [identifier, setIdentifier] = useState('')
   const [restaurantName, setRestaurantName] = useState('')
@@ -409,6 +428,86 @@ function RestaurantAccessScreen({ onLogin, onRegister }: { onLogin: (identifier:
     finally { setLoading(false) }
   }
   return <div className="login-screen"><div className="login-card restaurant-access-card"><div className="brand login-brand"><span className="brand-mark"><Utensils size={18} /></span><span>Service<span className="brand-accent">Pilot</span></span></div><p className="eyebrow">ESPACE RESTAURANT</p><h1>{registering ? 'Créer un établissement' : 'Accéder à votre restaurant'}</h1><p className="login-subtitle">{registering ? 'Créez l’accès restaurant et le premier profil gérant.' : 'Saisissez l’identifiant et le mot de passe de votre établissement.'}</p><div className="auth-mode-tabs"><button className={!registering ? 'active' : ''} onClick={() => { setRegistering(false); setError('') }}>Connexion</button><button className={registering ? 'active' : ''} onClick={() => { setRegistering(true); setError('') }}>Créer un restaurant</button></div>{registering && <label>Nom du restaurant<input value={restaurantName} onChange={(event) => setRestaurantName(event.target.value)} placeholder="Le Mijoté" /></label>}<label>Identifiant restaurant<input autoCapitalize="none" autoComplete="username" value={identifier} onChange={(event) => setIdentifier(event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-'))} placeholder="ex. le-mijote-paris" /></label>{registering && <><p className="auth-help">Pour rattacher les données locales existantes, utilise l’identifiant <strong>restaurant-demo</strong>.</p><label>Nom d’utilisateur du gérant<input autoCapitalize="none" autoComplete="off" value={managerUsername} onChange={(event) => setManagerUsername(event.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, ''))} placeholder="ex. louise" /></label><label>Nom affiché du gérant<input value={managerName} onChange={(event) => setManagerName(event.target.value)} placeholder="ex. Louise Martin" /></label><label>Code PIN gérant (4 à 12 chiffres)<input type="password" inputMode="numeric" autoComplete="new-password" maxLength={12} value={managerPin} onChange={(event) => setManagerPin(event.target.value.replace(/\D/g, ''))} /></label></>}<label>{registering ? 'Mot de passe restaurant (8 caractères minimum)' : 'Mot de passe restaurant'}<input type="password" autoComplete={registering ? 'new-password' : 'current-password'} value={password} onChange={(event) => setPassword(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && submit()} /></label>{error && <p className="login-error">{error}</p>}<button className="primary-button login-submit" disabled={loading || !identifier || !password || (registering && (!restaurantName.trim() || !managerUsername.trim() || managerPin.length < 4 || password.length < 8))} onClick={submit}>{loading ? 'Connexion...' : registering ? 'Créer le restaurant' : 'Continuer'}</button></div></div>
+}
+
+function RestaurantAccessScreenV2({ onLogin, onPlatformAccess }: { onLogin: (identifier: string, password: string) => Promise<void>; onPlatformAccess: () => void }) {
+  const [identifier, setIdentifier] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const submit = async () => {
+    if (loading) return
+    setLoading(true); setError('')
+    try { await onLogin(identifier, password) }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'Connexion impossible.') }
+    finally { setLoading(false) }
+  }
+  return <div className="login-screen"><div className="login-card"><div className="brand login-brand"><span className="brand-mark"><Utensils size={18} /></span><span>Service<span className="brand-accent">Pilot</span></span></div><p className="eyebrow">ESPACE RESTAURANT</p><h1>Accéder à votre restaurant</h1><p className="login-subtitle">Saisissez votre identifiant (code ou adresse e-mail) et mot de passe.</p><label>Identifiant restaurant<input type="text" inputMode="email" autoCapitalize="none" autoComplete="username" value={identifier} onChange={(event) => setIdentifier(event.target.value.toLowerCase())} placeholder="ex. contact@monrestaurant.fr" /></label><label>Mot de passe restaurant<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && submit()} /></label>{error && <p className="login-error">{error}</p>}<button className="primary-button login-submit" disabled={loading || !identifier.trim() || !password} onClick={submit}>{loading ? 'Connexion...' : 'Continuer'}</button><button className="switch-restaurant-button" onClick={onPlatformAccess}>Propriétaire de l’application</button></div></div>
+}
+
+function PlatformLoginScreen({ onLogin, onCancel }: { onLogin: (username: string, password: string) => Promise<void>; onCancel: () => void }) {
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const submit = async () => {
+    if (loading) return
+    setLoading(true); setError('')
+    try { await onLogin(username, password) }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'Connexion propriétaire impossible.') }
+    finally { setLoading(false) }
+  }
+  return <div className="login-screen"><div className="login-card"><div className="brand login-brand"><span className="brand-mark"><Utensils size={18} /></span><span>Service<span className="brand-accent">Pilot</span></span></div><p className="eyebrow">ADMINISTRATION SAAS</p><h1>Portail propriétaire</h1><p className="login-subtitle">Accès réservé à l’administration de la plateforme.</p><label>Identifiant propriétaire<input autoCapitalize="none" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} /></label><label>Mot de passe<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && submit()} /></label>{error && <p className="login-error">{error}</p>}<button className="primary-button login-submit" disabled={loading || !username || !password} onClick={submit}>{loading ? 'Vérification...' : 'Ouvrir le portail'}</button><button className="switch-restaurant-button" onClick={onCancel}>Retour à la connexion restaurant</button></div></div>
+}
+
+function PlatformOwnerDashboard({ onLogout }: { onLogout: () => Promise<void> }) {
+  const [overview, setOverview] = useState<PlatformOverview | null>(null)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [planName, setPlanName] = useState('')
+  const [planDays, setPlanDays] = useState(30)
+  const [planPrice, setPlanPrice] = useState('29')
+  const [restaurantName, setRestaurantName] = useState('')
+  const [identifier, setIdentifier] = useState('')
+  const [restaurantPassword, setRestaurantPassword] = useState('')
+  const [managerUsername, setManagerUsername] = useState('')
+  const [managerName, setManagerName] = useState('')
+  const [managerPin, setManagerPin] = useState('')
+  const [selectedPlanId, setSelectedPlanId] = useState('')
+  const [rowPlans, setRowPlans] = useState<Record<string, string>>({})
+  const [busy, setBusy] = useState(false)
+  const refresh = async () => setOverview(await getPlatformOverview())
+  useEffect(() => { getPlatformOverview().then(setOverview).catch((reason) => setError(reason instanceof Error ? reason.message : 'Chargement impossible.')) }, [])
+  const createPlan = async () => {
+    if (busy) return
+    setBusy(true); setError(''); setNotice('')
+    try { await createSubscriptionPlan({ name: planName.trim(), durationDays: planDays, price: Number(planPrice) }); await refresh(); setPlanName(''); setNotice('Offre créée.') }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'Création de l’offre impossible.') }
+    finally { setBusy(false) }
+  }
+  const createRestaurant = async () => {
+    if (busy) return
+    setBusy(true); setError(''); setNotice('')
+    try {
+      await createPlatformRestaurant({ identifier: identifier.trim().toLowerCase(), name: restaurantName.trim(), password: restaurantPassword, managerUsername: managerUsername.trim().toLowerCase(), managerName: managerName.trim(), managerPin, planId: selectedPlanId || overview?.plans[0]?.id || '' })
+      await refresh(); setRestaurantName(''); setIdentifier(''); setRestaurantPassword(''); setManagerUsername(''); setManagerName(''); setManagerPin(''); setNotice('Restaurant créé et licence attribuée.')
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Création du restaurant impossible.') }
+    finally { setBusy(false) }
+  }
+  const assignPlan = async (restaurant: ManagedRestaurant, status: 'active' | 'suspended') => {
+    if (busy) return
+    setBusy(true); setError(''); setNotice('')
+    const planId = rowPlans[restaurant.id] || restaurant.planId || overview?.plans[0]?.id || ''
+    try { await updateRestaurantSubscription(restaurant.id, { planId, status }); await refresh(); setNotice(status === 'active' ? `Licence de ${restaurant.name} renouvelée.` : `Accès de ${restaurant.name} suspendu.`) }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'Mise à jour de la licence impossible.') }
+    finally { setBusy(false) }
+  }
+  const expiryLabel = (restaurant: ManagedRestaurant) => {
+    if (restaurant.status === 'suspended') return 'Suspendu'
+    if (restaurant.expiresAt && new Date(restaurant.expiresAt).getTime() <= Date.now()) return 'Expiré'
+    return restaurant.expiresAt ? 'Actif' : 'À configurer'
+  }
+  return <div className="platform-shell"><header className="platform-header"><div><p className="eyebrow">SERVICEPILOT · PROPRIÉTAIRE</p><h1>Gestion des restaurants</h1></div><button className="action-button" onClick={onLogout}>Déconnexion</button></header>{error && <p className="login-error">{error}</p>}{notice && <p className="server-notice">{notice}</p>}<section className="platform-stats"><article><span>Restaurants</span><strong>{overview?.restaurants.length ?? '—'}</strong></article><article><span>Licences actives</span><strong>{overview?.restaurants.filter((restaurant) => expiryLabel(restaurant) === 'Actif').length ?? '—'}</strong></article><article><span>Offres</span><strong>{overview?.plans.length ?? '—'}</strong></article></section><div className="platform-columns"><section className="panel platform-panel"><div className="module-list-heading"><strong>Créer une offre</strong><span>Tarif indicatif · gestion manuelle</span></div><div className="platform-form"><label>Nom de l’offre<input value={planName} onChange={(event) => setPlanName(event.target.value)} placeholder="ex. Équipe 5" /></label><div className="platform-form-row"><label>Durée (jours)<input type="number" min="1" max="3650" value={planDays} onChange={(event) => setPlanDays(Number(event.target.value))} /></label><label>Prix (EUR)<input type="number" min="0" step="0.01" value={planPrice} onChange={(event) => setPlanPrice(event.target.value)} /></label></div><button className="primary-button" disabled={busy || !planName.trim()} onClick={createPlan}>Créer l’offre</button></div><div className="platform-plan-list">{overview?.plans.map((plan) => <article key={plan.id}><strong>{plan.name}</strong><span>{plan.durationDays} jours · {plan.price.toFixed(2)} {plan.currency}</span></article>)}</div></section><section className="panel platform-panel"><div className="module-list-heading"><strong>Créer un restaurant</strong><span>Identifiant et mot de passe propriétaire</span></div><div className="platform-form"><div className="platform-form-row"><label>Nom<input value={restaurantName} onChange={(event) => setRestaurantName(event.target.value)} placeholder="Le Mijoté" /></label><label>Identifiant<input autoCapitalize="none" value={identifier} onChange={(event) => setIdentifier(event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-'))} placeholder="le-mijote-paris" /></label></div><label>Mot de passe restaurant<input type="password" autoComplete="new-password" value={restaurantPassword} onChange={(event) => setRestaurantPassword(event.target.value)} /></label><div className="platform-form-row"><label>Compte gérant<input autoCapitalize="none" value={managerUsername} onChange={(event) => setManagerUsername(event.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, ''))} placeholder="louise" /></label><label>Nom affiché<input value={managerName} onChange={(event) => setManagerName(event.target.value)} placeholder="Louise Martin" /></label></div><div className="platform-form-row"><label>PIN gérant<input type="password" inputMode="numeric" maxLength={12} value={managerPin} onChange={(event) => setManagerPin(event.target.value.replace(/\D/g, ''))} /></label><label>Offre<select value={selectedPlanId || overview?.plans[0]?.id || ''} onChange={(event) => setSelectedPlanId(event.target.value)}>{overview?.plans.filter((plan) => plan.active).map((plan) => <option key={plan.id} value={plan.id}>{plan.name} · {plan.durationDays} j</option>)}</select></label></div><button className="primary-button" disabled={busy || !overview?.plans.length || !restaurantName.trim() || !identifier.trim() || restaurantPassword.length < 8 || managerUsername.length < 3 || managerName.trim().length < 2 || managerPin.length < 4} onClick={createRestaurant}>Créer et attribuer la licence</button></div></section></div><section className="panel platform-restaurants"><div className="module-list-heading"><strong>Parc restaurants</strong><span>{overview?.restaurants.length || 0}</span></div>{overview?.restaurants.map((restaurant) => <article className="platform-restaurant-row" key={restaurant.id}><div className="platform-restaurant-identity"><strong>{restaurant.name}</strong><small>{restaurant.identifier} · {restaurant.planName || 'Aucune offre'} · échéance {restaurant.expiresAt ? new Date(restaurant.expiresAt).toLocaleDateString('fr-FR') : 'sans date'}</small></div><span className={`status-pill ${expiryLabel(restaurant) !== 'Actif' ? 'orange-pill' : ''}`}>{!restaurant.accessConfigured ? 'À configurer' : expiryLabel(restaurant)}</span><select aria-label={`Offre pour ${restaurant.name}`} value={rowPlans[restaurant.id] || restaurant.planId || overview.plans[0]?.id || ''} onChange={(event) => setRowPlans((current) => ({ ...current, [restaurant.id]: event.target.value }))}>{overview.plans.filter((plan) => plan.active).map((plan) => <option key={plan.id} value={plan.id}>{plan.name}</option>)}</select><button className="action-button" disabled={busy || !restaurant.accessConfigured} onClick={() => assignPlan(restaurant, 'active')}>Attribuer / renouveler</button><button className="text-button" disabled={busy || !restaurant.accessConfigured} onClick={() => assignPlan(restaurant, 'suspended')}>Suspendre</button></article>)}</section></div>
 }
 
 function LoginScreen({ restaurant, profiles, onLogin, onSwitchRestaurant }: { restaurant: RestaurantContext; profiles: TeamProfile[]; onLogin: (username: string, pin: string) => Promise<void>; onSwitchRestaurant: () => void }) {
