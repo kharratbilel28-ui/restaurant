@@ -34,6 +34,7 @@ async function readDatabase(restaurantId = defaultRestaurantId) {
   database.invoices ||= []
   database.invoiceCounters ||= {}
   database.floorPlan ||= null
+  if (database.floorPlan) database.floorPlan = { ...database.floorPlan, pdfData: '' }
   for (const order of database.orders) if (order.status === 'kitchen') order.status = 'received'
   return database
 }
@@ -312,10 +313,11 @@ const server = createServer(async (request, response) => {
     if (url.pathname === '/api/floor-plan' && request.method === 'PUT') {
       if (roleFrom(request) !== 'manager') return send(response, 403, { error: 'Seule la gérante peut configurer le plan de salle' })
       const input = await body(request)
-      if (!input.fileName || typeof input.pdfData !== 'string' || !input.pdfData.startsWith('data:application/pdf;base64,')) return send(response, 400, { error: 'Sélectionnez un fichier PDF valide' })
+      if (!input.fileName || typeof input.pdfData !== 'string') return send(response, 400, { error: 'Sélectionnez un fichier PDF valide' })
+      if (input.pdfData && !input.pdfData.startsWith('data:application/pdf;base64,')) return send(response, 400, { error: 'Le fichier de référence doit être un PDF valide' })
       if (input.pdfData.length > 16_000_000) return send(response, 413, { error: 'Le PDF dépasse la taille maximale de 12 Mo' })
       const positions = Object.fromEntries(Object.entries(input.positions || {}).filter(([, point]) => Number.isFinite(point?.x) && Number.isFinite(point?.y)).map(([id, point]) => [id, { x: Math.min(100, Math.max(0, Number(point.x))), y: Math.min(100, Math.max(0, Number(point.y))) }]))
-      database.floorPlan = { fileName: input.fileName, pdfData: input.pdfData, positions }
+      database.floorPlan = { fileName: input.fileName, pdfData: '', positions }
       await saveDatabase(database, restaurantId)
       return send(response, 200, database.floorPlan)
     }
