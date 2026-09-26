@@ -110,7 +110,7 @@ function App() {
     const form = document.querySelector('.order-form')
     const summary = form?.querySelector('.order-summary')
     const submitButton = summary?.parentElement?.querySelector(':scope > .primary-button')
-    submitButton?.setAttribute('aria-label', 'Envoyer en cuisine')
+    submitButton?.setAttribute('aria-label', 'Envoyer en cuisine seulement')
   }, [activeNav, selectedTable, dashboard?.orders[0]?.id])
   const tables = dashboard?.tables || []
   const reservations = dashboard?.reservations || []
