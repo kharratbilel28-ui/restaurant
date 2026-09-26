@@ -293,6 +293,42 @@ const server = createServer(async (request, response) => {
       await saveDatabase(database, restaurantId)
       return send(response, 201, dish)
     }
+    if (url.pathname === '/api/tables' && request.method === 'POST') {
+      if (roleFrom(request) !== 'manager') return send(response, 403, { error: 'Seule la gérance peut ajouter des tables' })
+      const input = await body(request)
+      const id = String(input.id || '').trim()
+      const seats = Number(input.seats)
+      const zone = String(input.zone || '').trim()
+      if (!id || id.length > 24 || !Number.isInteger(seats) || seats < 1 || seats > 30 || !zone || zone.length > 40) return send(response, 400, { error: 'Renseignez un nom, une zone et entre 1 et 30 places' })
+      if (database.tables.some((table) => table.id.toLowerCase() === id.toLowerCase())) return send(response, 409, { error: 'Ce nom de table existe déjà' })
+      const table = { id, seats, zone, status: 'free' }
+      database.tables.push(table)
+      await saveDatabase(database, restaurantId)
+      return send(response, 201, table)
+    }
+    if (url.pathname.startsWith('/api/tables/') && request.method === 'PATCH') {
+      if (roleFrom(request) !== 'manager') return send(response, 403, { error: 'Seule la gérance peut modifier les tables' })
+      const oldId = decodeURIComponent(url.pathname.slice('/api/tables/'.length))
+      const table = database.tables.find((item) => item.id === oldId)
+      if (!table) return send(response, 404, { error: 'Table introuvable' })
+      const input = await body(request)
+      const id = String(input.id || '').trim()
+      const seats = Number(input.seats)
+      const zone = String(input.zone || '').trim()
+      if (!id || id.length > 24 || !Number.isInteger(seats) || seats < 1 || seats > 30 || !zone || zone.length > 40) return send(response, 400, { error: 'Renseignez un nom, une zone et entre 1 et 30 places' })
+      if (database.tables.some((item) => item.id !== oldId && item.id.toLowerCase() === id.toLowerCase())) return send(response, 409, { error: 'Ce nom de table existe déjà' })
+      table.id = id
+      table.seats = seats
+      table.zone = zone
+      if (id !== oldId) {
+        for (const order of database.orders) if (order.table === oldId) order.table = id
+        for (const reservation of database.reservations) if (reservation.table === oldId) reservation.table = id
+        const point = database.floorPlan?.positions?.[oldId]
+        if (point) { database.floorPlan.positions[id] = point; delete database.floorPlan.positions[oldId] }
+      }
+      await saveDatabase(database, restaurantId)
+      return send(response, 200, table)
+    }
     if (url.pathname.startsWith('/api/menu/') && request.method === 'PATCH') {
       if (roleFrom(request) !== 'manager') return send(response, 403, { error: 'Seule la gérante peut modifier le menu' })
       const dish = database.menu.find((item) => item.id === url.pathname.split('/').pop())
