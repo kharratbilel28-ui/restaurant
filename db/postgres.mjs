@@ -45,6 +45,33 @@ function withDefaults(state) {
   return state
 }
 
+async function seedMissingDemoData(fallbackState) {
+  const state = withDefaults(fallbackState)
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    for (const user of state.users.filter((item) => item.id.startsWith('demo-user-'))) {
+      await client.query('INSERT INTO users (restaurant_id, id, username, name, role, pin) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (restaurant_id, id) DO NOTHING', ['restaurant-demo', user.id, user.username || user.id, user.name, user.role, user.pin])
+    }
+    for (const table of state.tables.filter((item) => /^T1[0-6]$/.test(item.id))) {
+      await client.query('INSERT INTO dining_tables (restaurant_id, id, seats, status, zone) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (restaurant_id, id) DO NOTHING', ['restaurant-demo', table.id, table.seats, table.status, table.zone])
+    }
+    for (const item of state.menu.filter((dish) => dish.id.startsWith('demo-dish-'))) {
+      await client.query('INSERT INTO menu_items (restaurant_id, id, name, price, image, active) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (restaurant_id, id) DO NOTHING', ['restaurant-demo', item.id, item.name, item.price, item.image || '', item.active !== false])
+    }
+    for (const order of state.orders.filter((item) => item.id.startsWith('demo-order-'))) {
+      const inserted = await client.query('INSERT INTO orders (restaurant_id, id, table_name, item_count, amount, status, note, payment_method, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (restaurant_id, id) DO NOTHING RETURNING id', ['restaurant-demo', order.id, order.table, order.items, order.amount, order.status === 'kitchen' ? 'received' : order.status, order.note || '', order.paymentMethod || null, order.createdAt])
+      if (inserted.rowCount) for (const [index, line] of (order.lines || []).entries()) {
+        await client.query('INSERT INTO order_lines (restaurant_id, order_id, line_index, name, quantity, price) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (restaurant_id, order_id, line_index) DO NOTHING', ['restaurant-demo', order.id, index, line.name, line.quantity, line.price])
+      }
+    }
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally { client.release() }
+}
+
 export async function initPostgres(fallbackState) {
   for (const statement of schema) await pool.query(statement)
   await pool.query('ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS identifier text')
@@ -60,7 +87,10 @@ export async function initPostgres(fallbackState) {
   await pool.query('UPDATE users SET username = id WHERE username IS NULL')
   await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS users_username_unique ON users (restaurant_id, username)')
   const existing = await pool.query('SELECT id FROM restaurants WHERE id = $1', ['restaurant-demo'])
-  if (existing.rowCount > 0) return
+  if (existing.rowCount > 0) {
+    await seedMissingDemoData(fallbackState)
+    return
+  }
 
   const legacyTable = await pool.query("SELECT to_regclass('public.restaurant_state') AS table_name")
   if (legacyTable.rows[0].table_name) {

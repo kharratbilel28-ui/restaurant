@@ -49,6 +49,41 @@
       "name": "Caisse",
       "role": "cashier",
       "pin": "4444"
+    },
+    {
+      "id": "demo-user-server-soir",
+      "username": "sarah.soir",
+      "name": "Sarah Petit",
+      "role": "server",
+      "pin": "2223"
+    },
+    {
+      "id": "demo-user-server-terrasse",
+      "username": "yanis.terrasse",
+      "name": "Yanis Moreau",
+      "role": "server",
+      "pin": "2224"
+    },
+    {
+      "id": "demo-user-cashier-midi",
+      "username": "caisse-midi",
+      "name": "Nora Diallo",
+      "role": "cashier",
+      "pin": "4445"
+    },
+    {
+      "id": "demo-user-kitchen-chef",
+      "username": "chef-partie",
+      "name": "Mehdi Laurent",
+      "role": "kitchen",
+      "pin": "3334"
+    },
+    {
+      "id": "demo-user-kitchen-dessert",
+      "username": "poste-dessert",
+      "name": "Clara Robert",
+      "role": "kitchen",
+      "pin": "3335"
     }
   ],
   "orders": [
@@ -83,6 +118,113 @@
       "amount": 142.5,
       "status": "paid",
       "createdAt": "2026-09-24T19:12:00+02:00"
+    },
+    {
+      "id": "demo-order-01",
+      "table": "T10",
+      "items": 2,
+      "amount": 36,
+      "status": "received",
+      "note": "Sans oignons",
+      "lines": [{ "name": "Plat du jour", "quantity": 2, "price": 18 }],
+      "createdAt": "2026-09-26T18:42:00+02:00"
+    },
+    {
+      "id": "demo-order-02",
+      "table": "T11",
+      "items": 2,
+      "amount": 25,
+      "status": "preparing",
+      "note": "Sauce à part",
+      "lines": [{ "name": "Salade chèvre chaud", "quantity": 1, "price": 16 }, { "name": "Citronnade maison", "quantity": 1, "price": 9 }],
+      "createdAt": "2026-09-26T18:35:00+02:00"
+    },
+    {
+      "id": "demo-order-03",
+      "table": "T04",
+      "items": 2,
+      "amount": 33,
+      "status": "ready",
+      "note": "Cuisson rosée",
+      "lines": [{ "name": "Filet de bar", "quantity": 1, "price": 24 }, { "name": "Tarte au citron", "quantity": 1, "price": 9 }],
+      "createdAt": "2026-09-26T18:29:00+02:00"
+    },
+    {
+      "id": "demo-order-04",
+      "table": "T05",
+      "items": 2,
+      "amount": 41.5,
+      "status": "served",
+      "lines": [{ "name": "Risotto aux champignons", "quantity": 1, "price": 19.5 }, { "name": "Poulet rôti fermier", "quantity": 1, "price": 22 }],
+      "createdAt": "2026-09-26T18:15:00+02:00"
+    },
+    {
+      "id": "demo-order-05",
+      "table": "T06",
+      "items": 2,
+      "amount": 27,
+      "status": "paid",
+      "paymentMethod": "cash",
+      "lines": [{ "name": "Tartare de boeuf", "quantity": 1, "price": 21 }, { "name": "Citronnade maison", "quantity": 1, "price": 6 }],
+      "createdAt": "2026-09-26T18:03:00+02:00"
+    },
+    {
+      "id": "demo-order-06",
+      "table": "T13",
+      "items": 4,
+      "amount": 80,
+      "status": "paid",
+      "paymentMethod": "card",
+      "lines": [{ "name": "Filet de bar", "quantity": 2, "price": 24 }, { "name": "Salade chèvre chaud", "quantity": 2, "price": 16 }],
+      "createdAt": "2026-09-26T17:58:00+02:00"
+    },
+    {
+      "id": "demo-order-07",
+      "table": "T14",
+      "items": 2,
+      "amount": 14,
+      "status": "served",
+      "lines": [{ "name": "Tarte au citron", "quantity": 1, "price": 9 }, { "name": "Espresso", "quantity": 1, "price": 5 }],
+      "createdAt": "2026-09-26T17:49:00+02:00"
+    },
+    {
+      "id": "demo-order-08",
+      "table": "T16",
+      "items": 3,
+      "amount": 50,
+      "status": "received",
+      "lines": [{ "name": "Poulet rôti fermier", "quantity": 2, "price": 22 }, { "name": "Espresso", "quantity": 1, "price": 6 }],
+      "createdAt": "2026-09-26T17:41:00+02:00"
+    },
+    {
+      "id": "demo-order-09",
+      "table": "T01",
+      "items": 3,
+      "amount": 46.5,
+      "status": "paid",
+      "paymentMethod": "cash",
+      "lines": [{ "name": "Risotto aux champignons", "quantity": 1, "price": 19.5 }, { "name": "Citronnade maison", "quantity": 1, "price": 6 }, { "name": "Tartare de boeuf", "quantity": 1, "price": 21 }],
+      "createdAt": "2026-09-26T17:32:00+02:00"
+    },
+    {
+      "id": "demo-order-10",
+      "table": "T08",
+      "items": 4,
+      "amount": 58,
+      "status": "paid",
+      "paymentMethod": "card",
+      "lines": [{ "name": "Filet de bar", "quantity": 2, "price": 24 }, { "name": "Espresso", "quantity": 2, "price": 5 }],
+      "createdAt": "2026-09-26T17:25:00+02:00"
+    },
+    {
+      "id": "demo-order-11",
+      "table": "T09",
+      "items": 3,
+      "amount": 53,
+      "status": "paid",
+      "paymentMethod": "cash",
+      "lines": [{ "name": "Poulet rôti fermier", "quantity": 2, "price": 22 }, { "name": "Tarte au citron", "quantity": 1, "price": 9 }],
+      "createdAt": "2026-09-26T17:18:00+02:00"
     }
   ],
   "tables": [
@@ -139,6 +281,48 @@
       "seats": 6,
       "status": "free",
       "zone": "Salle principale"
+    },
+    {
+      "id": "T10",
+      "seats": 2,
+      "status": "occupied",
+      "zone": "Terrasse"
+    },
+    {
+      "id": "T11",
+      "seats": 4,
+      "status": "occupied",
+      "zone": "Terrasse"
+    },
+    {
+      "id": "T12",
+      "seats": 4,
+      "status": "free",
+      "zone": "Terrasse"
+    },
+    {
+      "id": "T13",
+      "seats": 6,
+      "status": "free",
+      "zone": "Salle principale"
+    },
+    {
+      "id": "T14",
+      "seats": 2,
+      "status": "occupied",
+      "zone": "Salle principale"
+    },
+    {
+      "id": "T15",
+      "seats": 4,
+      "status": "reserved",
+      "zone": "Salle principale"
+    },
+    {
+      "id": "T16",
+      "seats": 8,
+      "status": "occupied",
+      "zone": "Salon privé"
     }
   ],
   "inventory": [
@@ -187,6 +371,55 @@
       "name": "Dessert maison",
       "price": 9,
       "image": "https://images.unsplash.com/photo-1551024506-0bccd828d307?auto=format&fit=crop&w=400&q=80",
+      "active": true
+    },
+    {
+      "id": "demo-dish-01",
+      "name": "Risotto aux champignons",
+      "price": 19.5,
+      "image": "https://images.unsplash.com/photo-1476124369491-e7addf5db371?auto=format&fit=crop&w=400&q=80",
+      "active": true
+    },
+    {
+      "id": "demo-dish-02",
+      "name": "Tartare de boeuf",
+      "price": 21,
+      "image": "https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=400&q=80",
+      "active": true
+    },
+    {
+      "id": "demo-dish-03",
+      "name": "Poulet rôti fermier",
+      "price": 22,
+      "image": "https://images.unsplash.com/photo-1532550907401-a500c9a57435?auto=format&fit=crop&w=400&q=80",
+      "active": true
+    },
+    {
+      "id": "demo-dish-04",
+      "name": "Salade chèvre chaud",
+      "price": 16,
+      "image": "https://images.unsplash.com/photo-1512621776951-a57141f2eefd?auto=format&fit=crop&w=400&q=80",
+      "active": true
+    },
+    {
+      "id": "demo-dish-05",
+      "name": "Tarte au citron",
+      "price": 9,
+      "image": "https://images.unsplash.com/photo-1519915028121-7d3463d20b13?auto=format&fit=crop&w=400&q=80",
+      "active": true
+    },
+    {
+      "id": "demo-dish-06",
+      "name": "Citronnade maison",
+      "price": 6,
+      "image": "https://images.unsplash.com/photo-1513558161293-cdaf765edfd7?auto=format&fit=crop&w=400&q=80",
+      "active": true
+    },
+    {
+      "id": "demo-dish-07",
+      "name": "Espresso",
+      "price": 5,
+      "image": "https://images.unsplash.com/photo-1511920170033-f8396924c348?auto=format&fit=crop&w=400&q=80",
       "active": true
     }
   ]
