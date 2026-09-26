@@ -1,24 +1,59 @@
 import { createServer } from 'node:http'
-import { readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { randomUUID } from 'node:crypto'
-import { createInvoicePostgres, findUserByCredentials, getInvoicePostgres, initPostgres, markInvoiceEmailed, readPostgres, savePostgres } from './db/postgres.mjs'
+import { randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto'
+import { promisify } from 'node:util'
+import { createInvoicePostgres, createProfilePostgres, findRestaurantByIdentifier, findUserByCredentials, getInvoicePostgres, initPostgres, listProfilesPostgres, markInvoiceEmailed, readPostgres, registerRestaurantPostgres, savePostgres } from './db/postgres.mjs'
 import PDFDocument from 'pdfkit'
 import nodemailer from 'nodemailer'
 
 const root = dirname(fileURLToPath(import.meta.url))
 const databasePath = resolve(root, 'db/restaurant.json')
+const tenantCredentialsPath = resolve(root, 'db/tenant-credentials.json')
+const tenantDatabaseDirectory = resolve(root, 'db/tenants')
 const port = Number(process.env.PORT || process.env.API_PORT || 8787)
 const sessionDurationMs = 8 * 60 * 60 * 1000
 const sessions = new Map()
+const restaurantAccessSessions = new Map()
 const receiptReviewsInProgress = new Set()
+const scrypt = promisify(scryptCallback)
 let invoiceCreationQueue = Promise.resolve()
 const usePostgres = Boolean(process.env.DATABASE_URL)
 const defaultRestaurantId = 'restaurant-demo'
 
+function databasePathFor(restaurantId) { return restaurantId === defaultRestaurantId ? databasePath : resolve(tenantDatabaseDirectory, `${restaurantId}.json`) }
+function newRestaurantId(value) { return String(value || '').trim().toLowerCase() }
+
+async function hashPassword(password) {
+  const salt = randomBytes(16)
+  const key = await scrypt(password, salt, 64)
+  return `${salt.toString('hex')}:${key.toString('hex')}`
+}
+
+async function verifyPassword(password, storedHash) {
+  const [saltHex, keyHex] = String(storedHash || '').split(':')
+  if (!/^[0-9a-f]{32}$/.test(saltHex || '') || !/^[0-9a-f]{128}$/.test(keyHex || '')) return false
+  const expected = Buffer.from(keyHex, 'hex')
+  const actual = await scrypt(password, Buffer.from(saltHex, 'hex'), expected.length)
+  return timingSafeEqual(expected, actual)
+}
+
+async function readTenantCredentials() {
+  try { return JSON.parse(await readFile(tenantCredentialsPath, 'utf8')) }
+  catch (error) { if (error.code === 'ENOENT') return []; throw error }
+}
+
+async function writeTenantCredentials(credentials) {
+  await writeFile(tenantCredentialsPath, JSON.stringify(credentials, null, 2) + '\n')
+}
+
 async function readDatabase(restaurantId = defaultRestaurantId) {
-  const database = usePostgres ? await readPostgres(restaurantId) : JSON.parse(await readFile(databasePath, 'utf8'))
+  const database = usePostgres ? await readPostgres(restaurantId) : JSON.parse(await readFile(databasePathFor(restaurantId), 'utf8'))
+  database.reservations ||= []
+  database.users ||= []
+  database.orders ||= []
+  database.tables ||= []
   database.inventory ||= [
     { id: 'inv-1', name: 'Tomates coeur de boeuf', quantity: 8, unit: 'kg', minimum: 10, supplier: 'Metro' },
     { id: 'inv-2', name: 'Filet de bar', quantity: 14, unit: 'pieces', minimum: 8, supplier: 'La Maree' },
@@ -41,11 +76,13 @@ async function readDatabase(restaurantId = defaultRestaurantId) {
 
 async function saveDatabase(database, restaurantId = defaultRestaurantId) {
   if (usePostgres) return savePostgres(restaurantId, database)
-  return writeFile(databasePath, JSON.stringify(database, null, 2) + '\n')
+  const path = databasePathFor(restaurantId)
+  if (restaurantId !== defaultRestaurantId) await mkdir(tenantDatabaseDirectory, { recursive: true })
+  return writeFile(path, JSON.stringify(database, null, 2) + '\n')
 }
 
 function send(response, status, payload) {
-  response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': 'http://localhost:5173', 'Access-Control-Allow-Headers': 'Content-Type, Authorization', 'Access-Control-Allow-Methods': 'GET,POST,PATCH,OPTIONS' })
+  response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': 'http://localhost:5173', 'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Restaurant-Access', 'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS' })
   response.end(JSON.stringify(payload))
 }
 
@@ -71,6 +108,16 @@ function sessionFrom(request) {
   const session = sessions.get(token)
   if (!session || session.expiresAt <= Date.now()) {
     sessions.delete(token)
+    return null
+  }
+  return { token, ...session }
+}
+
+function restaurantAccessFrom(request) {
+  const token = request.headers['x-restaurant-access'] || ''
+  const session = restaurantAccessSessions.get(token)
+  if (!session || session.expiresAt <= Date.now()) {
+    restaurantAccessSessions.delete(token)
     return null
   }
   return { token, ...session }
@@ -127,17 +174,94 @@ const server = createServer(async (request, response) => {
   const url = new URL(request.url || '/', `http://${request.headers.host}`)
   try {
     if (url.pathname === '/api/health') return send(response, 200, { ok: true, service: 'restaurant-api', storage: usePostgres ? 'postgresql' : 'local-json' })
-    if (url.pathname === '/api/auth/login' && request.method === 'POST') {
+    if (url.pathname === '/api/auth/register-restaurant' && request.method === 'POST') {
       const input = await body(request)
-      const user = usePostgres
-        ? await findUserByCredentials(input.role, input.pin)
-        : (await readDatabase()).users?.find((item) => item.role === input.role && item.pin === input.pin)
-      if (!user) return send(response, 401, { error: 'Rôle ou code incorrect' })
+      const identifier = newRestaurantId(input.identifier)
+      const name = String(input.name || '').trim()
+      const password = String(input.password || '')
+      const username = String(input.managerUsername || '').trim().toLowerCase()
+      const managerName = String(input.managerName || username).trim()
+      const pin = String(input.managerPin || '')
+      if (!/^[a-z0-9][a-z0-9-]{2,39}$/.test(identifier) || name.length < 2 || name.length > 100 || password.length < 8 || password.length > 128 || !/^[a-z0-9._-]{3,32}$/.test(username) || managerName.length < 2 || managerName.length > 80 || !/^\d{4,12}$/.test(pin)) return send(response, 400, { error: 'Vérifiez l’identifiant (3-40 caractères), le nom, le mot de passe (8 caractères minimum), le compte gérant et son code PIN (4-12 chiffres).' })
+      const passwordHash = await hashPassword(password)
+      const manager = { id: `user-${randomUUID()}`, username, name: managerName, role: 'manager', pin }
+      try {
+        let restaurant
+        if (usePostgres) {
+          restaurant = await registerRestaurantPostgres({ id: identifier, identifier, name, passwordHash, manager })
+        } else {
+          const credentials = await readTenantCredentials()
+          if (credentials.some((item) => item.identifier === identifier)) return send(response, 409, { error: 'Cet identifiant restaurant est déjà utilisé' })
+          const path = databasePathFor(identifier)
+          let existingState = null
+          try { existingState = JSON.parse(await readFile(path, 'utf8')) } catch (error) { if (error.code !== 'ENOENT') throw error }
+          if (identifier === defaultRestaurantId) {
+            const state = await readDatabase(identifier)
+            if (state.users.some((user) => (user.username || user.id).toLowerCase() === username)) return send(response, 409, { error: 'Ce nom d’utilisateur existe déjà dans ce restaurant' })
+            state.users.push(manager)
+            await saveDatabase(state, identifier)
+          } else {
+            if (existingState) return send(response, 409, { error: 'Un espace existe déjà sous cet identifiant; contactez le support.' })
+            const state = { reservations: [], users: [manager], orders: [], tables: [], inventory: [], menu: [], stockWithdrawals: [], stockReceipts: [], invoices: [], invoiceCounters: {}, floorPlan: null }
+            await mkdir(tenantDatabaseDirectory, { recursive: true })
+            await writeFile(path, JSON.stringify(state, null, 2) + '\n')
+          }
+          credentials.push({ id: identifier, identifier, name, passwordHash })
+          await writeTenantCredentials(credentials)
+          restaurant = { id: identifier, identifier, name }
+        }
+        const token = randomUUID()
+        const expiresAt = Date.now() + sessionDurationMs
+        restaurantAccessSessions.set(token, { restaurantId: restaurant.id, name: restaurant.name, identifier: restaurant.identifier, expiresAt })
+        return send(response, 201, { token, expiresAt, restaurant })
+      } catch (error) {
+        if (error.code === 'RESTAURANT_EXISTS' || error.code === '23505') return send(response, 409, { error: 'Cet identifiant restaurant ou nom d’utilisateur est déjà utilisé' })
+        throw error
+      }
+    }
+    if (url.pathname === '/api/auth/restaurant' && request.method === 'POST') {
+      const input = await body(request)
+      const identifier = newRestaurantId(input.identifier)
+      const record = usePostgres
+        ? await findRestaurantByIdentifier(identifier)
+        : (await readTenantCredentials()).find((item) => item.identifier === identifier)
+      if (!record || !await verifyPassword(String(input.password || ''), record.passwordHash)) return send(response, 401, { error: 'Identifiant restaurant ou mot de passe incorrect' })
       const token = randomUUID()
       const expiresAt = Date.now() + sessionDurationMs
-      const restaurantId = user.restaurant_id || user.restaurantId || defaultRestaurantId
+      restaurantAccessSessions.set(token, { restaurantId: record.id, name: record.name, identifier, expiresAt })
+      return send(response, 200, { token, expiresAt, restaurant: { id: record.id, identifier, name: record.name } })
+    }
+    if (url.pathname === '/api/auth/restaurant' && request.method === 'GET') {
+      const access = restaurantAccessFrom(request)
+      if (!access) return send(response, 401, { error: 'Connectez-vous d’abord à votre restaurant' })
+      return send(response, 200, { restaurant: { id: access.restaurantId, identifier: access.identifier, name: access.name } })
+    }
+    if (url.pathname === '/api/auth/restaurant' && request.method === 'DELETE') {
+      const access = restaurantAccessFrom(request)
+      if (access) restaurantAccessSessions.delete(access.token)
+      return send(response, 204, {})
+    }
+    if (url.pathname === '/api/auth/profiles' && request.method === 'GET') {
+      const access = restaurantAccessFrom(request)
+      if (!access) return send(response, 401, { error: 'Connectez-vous d’abord à votre restaurant' })
+      const profiles = usePostgres
+        ? await listProfilesPostgres(access.restaurantId)
+        : (await readDatabase(access.restaurantId)).users.map((user) => ({ id: user.id, username: user.username || user.id, name: user.name, role: user.role }))
+      return send(response, 200, profiles)
+    }
+    if (url.pathname === '/api/auth/login' && request.method === 'POST') {
+      const access = restaurantAccessFrom(request)
+      if (!access) return send(response, 401, { error: 'Connectez-vous d’abord à votre restaurant' })
+      const input = await body(request)
+      const user = usePostgres
+        ? await findUserByCredentials(access.restaurantId, input.username, input.pin)
+        : (await readDatabase(access.restaurantId)).users?.find((item) => (item.username || item.id) === input.username && item.pin === input.pin)
+      if (!user) return send(response, 401, { error: 'Profil ou code PIN incorrect' })
+      const token = randomUUID()
+      const expiresAt = Date.now() + sessionDurationMs
+      const restaurantId = access.restaurantId
       sessions.set(token, { userId: user.id, name: user.name, role: user.role, restaurantId, expiresAt })
-      return send(response, 200, { token, expiresAt, user: { id: user.id, name: user.name, role: user.role } })
+      return send(response, 200, { token, expiresAt, user: { id: user.id, username: user.username || user.id, name: user.name, role: user.role } })
     }
     if (url.pathname === '/api/auth/me' && request.method === 'GET') {
       const session = requireSession(request, response)
@@ -150,8 +274,24 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'GET' && !url.pathname.startsWith('/api/')) return serveFrontend(request, response, url.pathname)
     const activeSession = sessionFrom(request)
-    const restaurantId = activeSession?.restaurantId || defaultRestaurantId
+    const restaurantId = activeSession?.restaurantId || restaurantAccessFrom(request)?.restaurantId || defaultRestaurantId
     const database = await readDatabase(restaurantId)
+    if (url.pathname === '/api/profiles' && request.method === 'POST') {
+      if (roleFrom(request) !== 'manager') return send(response, 403, { error: 'Seule la gérance peut créer des profils' })
+      const input = await body(request)
+      const username = String(input.username || '').trim().toLowerCase()
+      const name = String(input.name || '').trim()
+      const role = String(input.role || '')
+      const pin = String(input.pin || '')
+      if (!/^[a-z0-9._-]{3,32}$/.test(username) || name.length < 2 || name.length > 80 || !['manager', 'server', 'kitchen', 'cashier'].includes(role) || !/^\d{4,12}$/.test(pin)) return send(response, 400, { error: 'Nom d’utilisateur (3-32 caractères), nom, rôle et PIN (4-12 chiffres) requis.' })
+      if (!usePostgres && database.users.some((user) => (user.username || user.id).toLowerCase() === username)) return send(response, 409, { error: 'Ce nom d’utilisateur existe déjà dans ce restaurant' })
+      const profile = { id: `user-${randomUUID()}`, username, name, role, pin }
+      let created
+      try { created = usePostgres ? await createProfilePostgres(restaurantId, profile) : profile }
+      catch (error) { if (error.code === '23505') return send(response, 409, { error: 'Ce nom d’utilisateur existe déjà dans ce restaurant' }); throw error }
+      if (!usePostgres) { database.users.push(profile); await saveDatabase(database, restaurantId) }
+      return send(response, 201, created)
+    }
     if (url.pathname === '/api/dashboard' && request.method === 'GET') {
       if (!requireSession(request, response)) return
       return send(response, 200, { reservations: database.reservations, orders: database.orders, tables: database.tables, stats: { reservations: 24, covers: 86, revenue: 2840, averageDuration: '1h42' } })

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import './App.css'
 import './modules.css'
-import { createDiningTable, createInvoice, createMenuItem, createOrder, createReservation, createStockReceiptDraft, createStockWithdrawal, getDashboard, getFloorPlan, getHealth, getInventory, getMenu, getSession, getStockReceipts, getStockWithdrawals, login, logout, openCashDrawer, reviewStockReceipt, saveFloorPlan, sendInvoiceEmail, updateDiningTable, updateInventory, updateMenuItem, updateOrderStatus, type Dashboard, type FloorPlanConfig, type InventoryItem, type Invoice, type MenuItem, type Order, type OrderLine, type RestaurantTable, type Role, type SessionUser, type StockReceipt, type StockReceiptLine, type StockWithdrawal } from './api'
+import { createDiningTable, createInvoice, createMenuItem, createOrder, createProfile, createReservation, createStockReceiptDraft, createStockWithdrawal, getDashboard, getFloorPlan, getHealth, getInventory, getMenu, getProfiles, getRestaurantContext, getSession, getStockReceipts, getStockWithdrawals, login, loginRestaurant, logout, logoutRestaurant, openCashDrawer, registerRestaurant, reviewStockReceipt, saveFloorPlan, sendInvoiceEmail, updateDiningTable, updateInventory, updateMenuItem, updateOrderStatus, type Dashboard, type FloorPlanConfig, type InventoryItem, type Invoice, type MenuItem, type Order, type OrderLine, type RestaurantContext, type RestaurantTable, type Role, type SessionUser, type StockReceipt, type StockReceiptLine, type StockWithdrawal, type TeamProfile } from './api'
 import type { InvoiceAnalysis } from './invoiceOcr'
 
 type IconProps = { size?: number }
@@ -28,6 +28,8 @@ function App() {
   const [apiError, setApiError] = useState('')
   const [role, setRole] = useState<Role>('manager')
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(null)
+  const [restaurantContext, setRestaurantContext] = useState<RestaurantContext | null>(null)
+  const [profiles, setProfiles] = useState<TeamProfile[]>([])
   const [sessionReady, setSessionReady] = useState(false)
   const [inventory, setInventory] = useState<InventoryItem[]>([])
   const [selectedTable, setSelectedTable] = useState('')
@@ -47,12 +49,30 @@ function App() {
 
   useEffect(() => {
     const token = localStorage.getItem('restaurant-token')
+    const accessToken = localStorage.getItem('restaurant-access-token')
     if (!token) {
-      setSessionReady(true)
+      if (accessToken) Promise.all([getRestaurantContext(), getProfiles()]).then(([context, availableProfiles]) => { setRestaurantContext(context.restaurant); setProfiles(availableProfiles) }).catch(() => { localStorage.removeItem('restaurant-access-token') }).finally(() => setSessionReady(true))
+      else setSessionReady(true)
       return
     }
-    const restore = getSession().then(({ user }) => user)
-    restore.then((user) => { setSessionUser(user); setRole(user.role); setActiveNav(user.role === 'kitchen' ? 'Cuisine' : user.role === 'cashier' ? 'Caisse & paiements' : user.role === 'server' ? 'Prise de commande' : 'Vue d’ensemble'); return Promise.all([getDashboard(), getInventory(), getMenu(), getStockWithdrawals(), getFloorPlan(), getStockReceipts()]) }).then(([data, stock, dishes, withdrawals, plan, receipts]) => { previousOrderStatuses.current = Object.fromEntries(data.orders.map((order) => [order.id, order.status])); setDashboard(data); setInventory(stock); setMenu(dishes); setStockWithdrawals(withdrawals); setFloorPlan(plan); setStockReceipts(receipts); const lowStock = stock.filter((item) => item.quantity <= item.minimum); setNotifications(lowStock.map((item) => ({ id: `stock-low-${item.id}`, title: 'Stock à réapprovisionner', message: `${item.name} : ${item.quantity} ${item.unit} restants (seuil ${item.minimum}).`, createdAt: new Date().toISOString(), target: 'Approvisionnement', read: false }))) }).catch(() => { localStorage.removeItem('restaurant-token'); setApiError('Connexion impossible au serveur. Vérifiez votre connexion réseau ou réessayez.') }).finally(() => setSessionReady(true))
+    Promise.all([getSession(), getRestaurantContext()]).then(([session, context]) => {
+      const user = session.user
+      setRestaurantContext(context.restaurant)
+      setSessionUser(user)
+      setRole(user.role)
+      setActiveNav(user.role === 'kitchen' ? 'Cuisine' : user.role === 'cashier' ? 'Caisse & paiements' : user.role === 'server' ? 'Prise de commande' : 'Vue d’ensemble')
+      return Promise.all([getDashboard(), getInventory(), getMenu(), getStockWithdrawals(), getFloorPlan(), getStockReceipts(), getProfiles()])
+    }).then(([data, stock, dishes, withdrawals, plan, receipts, availableProfiles]) => {
+      previousOrderStatuses.current = Object.fromEntries(data.orders.map((order) => [order.id, order.status]))
+      setDashboard(data); setInventory(stock); setMenu(dishes); setStockWithdrawals(withdrawals); setFloorPlan(plan); setStockReceipts(receipts); setProfiles(availableProfiles)
+      const lowStock = stock.filter((item) => item.quantity <= item.minimum)
+      setNotifications(lowStock.map((item) => ({ id: `stock-low-${item.id}`, title: 'Stock à réapprovisionner', message: `${item.name} : ${item.quantity} ${item.unit} restants (seuil ${item.minimum}).`, createdAt: new Date().toISOString(), target: 'Approvisionnement', read: false })))
+    }).catch(() => {
+      localStorage.removeItem('restaurant-token')
+      getRestaurantContext().then((context) => setRestaurantContext(context.restaurant)).catch(() => localStorage.removeItem('restaurant-access-token'))
+      setSessionUser(null)
+      setApiError('Session expirée. Reconnectez-vous à votre profil.')
+    }).finally(() => setSessionReady(true))
   }, [])
   useEffect(() => { getHealth().then((health) => setStorageMode(health.storage)).catch(() => setStorageMode('unknown')) }, [])
   useEffect(() => {
@@ -154,8 +174,41 @@ function App() {
   const handleReceiptReview = async (id: string, status: 'approved' | 'rejected') => { try { const result = await reviewStockReceipt(id, status); setStockReceipts((current) => current.map((receipt) => receipt.id === id ? result.receipt : receipt)); setInventory(result.inventory); setServerNotice(status === 'approved' ? 'Fiche validée; les quantités ont été ajoutées au stock.' : 'Fiche refusée; le stock n’a pas été modifié.') } catch { setApiError('Impossible de traiter cette fiche d’entrée.') } }
   const handleCreateInvoice = async (orderId: string, details: Omit<Parameters<typeof createInvoice>[0], 'orderId'>) => { try { const invoice = await createInvoice({ ...details, orderId }); setInvoiceOrder(null); setPrintDocument({ kind: 'invoice', invoice }); return invoice } catch (error) { setApiError(error instanceof Error ? error.message : 'Création de facture impossible.'); return null } }
   const handleSendInvoice = async (invoice: Invoice): Promise<boolean> => { try { await sendInvoiceEmail(invoice.id); setServerNotice(`Facture ${invoice.invoiceNumber} envoyée par e-mail.`); return true } catch (error) { setApiError(error instanceof Error ? error.message : 'Envoi e-mail impossible.'); return false } }
+  const acceptRestaurant = async (access: { token: string; restaurant: RestaurantContext }) => {
+    localStorage.setItem('restaurant-access-token', access.token)
+    localStorage.removeItem('restaurant-token')
+    setRestaurantContext(access.restaurant)
+    setSessionUser(null)
+    setDashboard(null)
+    setApiError('')
+    const availableProfiles = await getProfiles()
+    setProfiles(availableProfiles)
+  }
+  const handleRestaurantLogin = async (identifier: string, password: string) => acceptRestaurant(await loginRestaurant(identifier, password))
+  const handleRestaurantRegister = async (input: { identifier: string; name: string; password: string; managerUsername: string; managerName: string; managerPin: string }) => acceptRestaurant(await registerRestaurant(input))
+  const handleTeamLogin = async (user: SessionUser, token: string) => {
+    localStorage.setItem('restaurant-token', token)
+    setSessionUser(user)
+    setRole(user.role)
+    setActiveNav(user.role === 'kitchen' ? 'Cuisine' : user.role === 'cashier' ? 'Caisse & paiements' : user.role === 'server' ? 'Prise de commande' : 'Vue d’ensemble')
+    setSessionReady(true)
+    try {
+      const [data, stock, dishes, withdrawals, plan, receipts, availableProfiles] = await Promise.all([getDashboard(), getInventory(), getMenu(), getStockWithdrawals(), getFloorPlan(), getStockReceipts(), getProfiles()])
+      previousOrderStatuses.current = Object.fromEntries(data.orders.map((order) => [order.id, order.status]))
+      setDashboard(data); setInventory(stock); setMenu(dishes); setStockWithdrawals(withdrawals); setFloorPlan(plan); setStockReceipts(receipts); setProfiles(availableProfiles)
+    } catch { setApiError('Connexion établie, mais les données du restaurant ne sont pas disponibles.') }
+  }
+  const handleCreateProfile = async (profile: { username: string; name: string; role: Role; pin: string }) => {
+    const created = await createProfile(profile)
+    setProfiles((current) => [...current, created].sort((left, right) => left.name.localeCompare(right.name)))
+  }
   useEffect(() => { if (sessionUser?.role === 'manager') getStockReceipts().then(setStockReceipts).catch(() => undefined) }, [sessionUser])
   const handleLogout = async () => { try { await logout() } finally { localStorage.removeItem('restaurant-token'); setSessionUser(null); setDashboard(null); setSessionReady(true); setActiveNav('Vue d’ensemble') } }
+  const handleRestaurantLogout = async () => { await Promise.allSettled([logout(), logoutRestaurant()]); localStorage.removeItem('restaurant-token'); localStorage.removeItem('restaurant-access-token'); setSessionUser(null); setRestaurantContext(null); setProfiles([]); setDashboard(null); setSessionReady(true); setActiveNav('Vue d’ensemble') }
+
+  const authView = restaurantContext
+    ? <LoginScreen restaurant={restaurantContext} profiles={profiles} onLogin={async (username, pin) => { const session = await login(username, pin); await handleTeamLogin(session.user, session.token) }} onSwitchRestaurant={handleRestaurantLogout} />
+    : <RestaurantAccessScreen onLogin={handleRestaurantLogin} onRegister={handleRestaurantRegister} />
 
   const renderView = () => {
     if (activeNav === 'Vue d’ensemble') return <DashboardView dashboard={dashboard} tables={tables} tableZones={tableZones} reservations={reservations} onNavigate={setActiveNav} onTableSelect={(id) => { setSelectedTable(id); setActiveNav('Prise de commande') }} />
@@ -168,15 +221,15 @@ function App() {
     if (activeNav === 'Approvisionnement') return <ModuleView title="Approvisionnement" description="Analysez les factures en brouillon; seules les fiches validées modifient le stock." icon="□"><InvoiceStockModule items={inventory} receipts={stockReceipts} onUpdate={handleStock} onAnalyze={(file, onProgress) => import('./invoiceOcr').then(({ analyzeInvoice }) => analyzeInvoice(file, inventory, onProgress))} onCreateDraft={handleInvoiceDraft} onReviewReceipt={handleReceiptReview} /><InventoryLevelsModule items={inventory} onUpdate={handleStock} /></ModuleView>
     if (activeNav === 'Finances') return <ModuleView title="Finances" description="Suivez les encaissements et le chiffre d’affaires du service." icon="€"><FinanceModule orders={dashboard?.orders || []} /></ModuleView>
       if (activeNav === 'Menu & plats') return <ModuleView title="Menu & plats" description="Créez vos plats, leurs prix et leurs photos." icon="♧"><MenuModule items={menu} onCreate={handleMenuItem} /></ModuleView>
-      if (!sessionUser) return <LoginScreen onLogin={(user, token) => { localStorage.setItem('restaurant-token', token); setSessionUser(user); setRole(user.role); setActiveNav(user.role === 'kitchen' ? 'Cuisine' : user.role === 'cashier' ? 'Caisse & paiements' : user.role === 'server' ? 'Prise de commande' : 'Vue d’ensemble'); setSessionReady(true); Promise.all([getDashboard(), getInventory(), getMenu(), getStockWithdrawals()]).then(([data, stock, dishes, withdrawals]) => { previousOrderStatuses.current = Object.fromEntries(data.orders.map((order) => [order.id, order.status])); setDashboard(data); setInventory(stock); setMenu(dishes); setStockWithdrawals(withdrawals) }).catch(() => setApiError('Connexion établie, mais les données API sont indisponibles. Réessayez dans un instant.')) }} />
-    return <ModuleView title="Paramètres & configuration" description="Gérez les plats, les tables et le plan de salle de l’établissement." icon="⚙"><SettingsModule user={sessionUser} onLogout={handleLogout} menu={menu} onCreateMenuItem={handleMenuItem} onUpdateMenuItem={handleMenuUpdate} tables={tables} onCreateTable={handleTableCreate} onUpdateTable={handleTableUpdate} floorPlan={floorPlan} onSaveFloorPlan={handleFloorPlanSave} storageMode={storageMode} /></ModuleView>
+    if (!sessionUser) return authView
+    return <ModuleView title="Paramètres & configuration" description="Gérez les plats, les profils, les tables et le plan de salle." icon="⚙"><SettingsModule user={sessionUser} onLogout={handleLogout} onSwitchRestaurant={handleRestaurantLogout} menu={menu} onCreateMenuItem={handleMenuItem} onUpdateMenuItem={handleMenuUpdate} tables={tables} onCreateTable={handleTableCreate} onUpdateTable={handleTableUpdate} profiles={profiles} onCreateProfile={handleCreateProfile} floorPlan={floorPlan} onSaveFloorPlan={handleFloorPlanSave} storageMode={storageMode} /></ModuleView>
   }
   if (!sessionReady) return <div className="session-loading">Vérification de la session...</div>
-  if (!sessionUser) return <LoginScreen onLogin={(user, token) => { localStorage.setItem('restaurant-token', token); setSessionUser(user); setRole(user.role); setActiveNav(user.role === 'kitchen' ? 'Cuisine' : user.role === 'cashier' ? 'Caisse & paiements' : user.role === 'server' ? 'Prise de commande' : 'Vue d’ensemble'); setSessionReady(true); Promise.all([getDashboard(), getInventory()]).then(([data, stock]) => { setDashboard(data); setInventory(stock) }).catch(() => setApiError('Impossible de charger les données')) }} />
+  if (!sessionUser) return authView
   return <div className="app-shell">
     <aside className={`sidebar ${mobileNavOpen ? 'mobile-open' : ''}`}>
       <div className="brand"><span className="brand-mark"><Utensils size={18} /></span><span>Service<span className="brand-accent">Pilot</span></span></div>
-      <div className="workspace-switcher"><span className="avatar">LM</span><span><strong>Le Mijoté</strong><small>Restaurant · Paris 11e</small></span><ChevronDown size={15} /></div>
+      <div className="workspace-switcher"><span className="avatar">{restaurantContext?.name.slice(0, 2).toUpperCase() || 'R'}</span><span><strong>{restaurantContext?.name || 'Restaurant'}</strong><small>{restaurantContext?.identifier || 'Espace restaurant'}</small></span><ChevronDown size={15} /></div>
       <p className="nav-caption">PILOTAGE</p>
       <nav>{navItems.filter(({ label }) => role === 'manager' || (role === 'server' && ['Prise de commande', 'Plan de salle', 'Réservations'].includes(label)) || (role === 'kitchen' && label === 'Cuisine') || (role === 'cashier' && ['Plan de salle', 'Caisse & paiements'].includes(label))).map(({ label, icon: Icon, badge }) => <button key={label} className={`nav-item ${activeNav === label ? 'active' : ''}`} onClick={() => { setActiveNav(label); setMobileNavOpen(false) }}><Icon size={18} /><span>{label}</span>{badge && <em>{badge}</em>}</button>)}</nav>
       <p className="nav-caption bottom-caption">{role === 'kitchen' ? 'STOCK CUISINE' : 'ADMINISTRATION'}</p>
@@ -194,8 +247,8 @@ function App() {
       {renderView()}
     </main>
     {showAdd && <ReservationModal onClose={() => setShowAdd(false)} onSubmit={handleReservation} />}
-    {invoiceOrder && <InvoiceComposer order={invoiceOrder} onClose={() => setInvoiceOrder(null)} onCreate={handleCreateInvoice} />}
-    {printDocument && <PrintPreview document={printDocument} onClose={() => setPrintDocument(null)} onEmail={printDocument.kind === 'invoice' ? () => handleSendInvoice(printDocument.invoice) : undefined} />}
+    {invoiceOrder && <InvoiceComposer order={invoiceOrder} restaurantName={restaurantContext?.name || ''} onClose={() => setInvoiceOrder(null)} onCreate={handleCreateInvoice} />}
+    {printDocument && <PrintPreview document={printDocument} restaurantName={restaurantContext?.name || 'Restaurant'} onClose={() => setPrintDocument(null)} onEmail={printDocument.kind === 'invoice' ? () => handleSendInvoice(printDocument.invoice) : undefined} />}
   </div>
 }
 function StatCard({ icon, label, value, note, trend }: { icon: React.ReactNode; label: string; value: string; note: string; trend: 'up' | 'neutral' }) { return <article className="stat-card"><div className="stat-icon">{icon}</div><span className="stat-label">{label}</span><strong className="stat-value">{value}</strong><span className={`stat-note ${trend}`}>{note}</span></article> }
@@ -213,7 +266,7 @@ function FloorPlan({ tables, tableZones, onSelect, background, positions, placin
     })
   }
   return <><div className={`floor-map-canvas ${placingTableId ? 'placing' : ''}`} onClick={placeSelectedTable} aria-label="Plan graphique du restaurant">
-    <div className="floor-plan-header"><span>LE MIJOTÉ</span><span>{tables.length} tables</span></div>
+    <div className="floor-plan-header"><span>PLAN DE SALLE</span><span>{tables.length} tables</span></div>
     <div className="floor-plan-counter">COMPTOIR <i /><i /><i /></div>
     <div className="floor-plan-kitchen">CUISINE</div>
     <div className="floor-plan-zones">{zoneLabels.map((zone, index) => <span key={zone} className={`floor-plan-zone zone-${index % 3}`}>{zone}</span>)}</div>
@@ -250,8 +303,29 @@ function MenuModule({ items, onCreate }: { items: MenuItem[]; onCreate: (item: {
   return <section className="panel menu-admin"><div className="module-list-heading"><strong>Plats disponibles</strong><span>{items.length} plats</span></div><div className="menu-admin-grid">{items.map((item) => <article key={item.id}><img src={item.image} alt="" /><strong>{item.name}</strong><span>{item.price.toFixed(2).replace('.', ',')} €</span></article>)}</div><div className="add-dish"><strong>Créer un nouveau plat</strong><div className="dish-fields"><input placeholder="Nom du plat" value={name} onChange={(event) => setName(event.target.value)} /><input type="number" min="0.01" step="0.01" placeholder="Prix €" value={price} onChange={(event) => setPrice(event.target.value)} /><label className="dish-photo-upload">{image.startsWith('data:') ? <><img className="dish-photo-preview" src={image} alt="" />Remplacer la photo</> : 'Prendre une photo'}<input type="file" accept="image/*" capture="environment" onChange={(event) => readImage(event.target.files?.[0])} /></label><input aria-label="URL de la photo (facultatif)" placeholder="Ou URL de la photo" value={image.startsWith('data:') ? '' : image} onChange={(event) => setImage(event.target.value)} /><button className="action-button" disabled={!name.trim() || !price || Number(price) <= 0} onClick={addDish}>Ajouter au menu</button></div></div></section>
 }
 function FinanceModule({ orders }: { orders: Dashboard['orders'] }) { const revenue = orders.filter((order) => order.status === 'paid').reduce((sum, order) => sum + order.amount, 0); const vat = revenue * 0.1; return <><section className="panel finance-grid"><article><span>CA encaissé</span><strong>{revenue.toFixed(2).replace('.', ',')} €</strong></article><article><span>TVA estimée (10%)</span><strong>{vat.toFixed(2).replace('.', ',')} €</strong></article><article><span>Panier moyen</span><strong>{orders.length ? `${(revenue / orders.length).toFixed(2).replace('.', ',')} €` : '0,00 €'}</strong></article></section><section className="panel finance-report"><div><strong>Clôture et déclaration</strong><span>Journal des ventes, TVA collectée et export comptable</span></div><button className="action-button" onClick={() => window.print()}>Imprimer le rapport</button></section></> }
-function SettingsModule({ user, onLogout, menu, onCreateMenuItem, onUpdateMenuItem, tables, onCreateTable, onUpdateTable, floorPlan, onSaveFloorPlan, storageMode }: { user: SessionUser | null; onLogout: () => void; menu: MenuItem[]; onCreateMenuItem: (item: { name: string; price: number; image: string }) => void; onUpdateMenuItem: (id: string, item: { name: string; price: number; image: string; active: boolean }) => void; tables: RestaurantTable[]; onCreateTable: (table: { id: string; seats: number; zone: string }) => Promise<void>; onUpdateTable: (oldId: string, table: { id: string; seats: number; zone: string }) => Promise<void>; floorPlan: FloorPlanConfig | null; onSaveFloorPlan: (plan: FloorPlanConfig) => Promise<void>; storageMode: 'postgresql' | 'local-json' | 'unknown' }) {
-  return <div className="settings-stack"><section className="panel settings-module"><div><strong>Session active</strong><span>{user?.name} · {user?.role}</span></div><div className="storage-status"><strong>Base partagée</strong><span>{storageMode === 'postgresql' ? 'PostgreSQL Render' : storageMode === 'local-json' ? 'JSON local à cet ordinateur' : 'État de la connexion inconnu'}</span></div><button className="action-button" onClick={onLogout}>Fermer la session</button></section><MenuConfiguration items={menu} onCreate={onCreateMenuItem} onUpdate={onUpdateMenuItem} /><TableConfiguration tables={tables} onCreate={onCreateTable} onUpdate={onUpdateTable} /><FloorPlanConfiguration tables={tables} floorPlan={floorPlan} onSave={onSaveFloorPlan} /></div>
+function SettingsModule({ user, onLogout, onSwitchRestaurant, menu, onCreateMenuItem, onUpdateMenuItem, tables, onCreateTable, onUpdateTable, profiles, onCreateProfile, floorPlan, onSaveFloorPlan, storageMode }: { user: SessionUser | null; onLogout: () => void; onSwitchRestaurant: () => void; menu: MenuItem[]; onCreateMenuItem: (item: { name: string; price: number; image: string }) => void; onUpdateMenuItem: (id: string, item: { name: string; price: number; image: string; active: boolean }) => void; tables: RestaurantTable[]; onCreateTable: (table: { id: string; seats: number; zone: string }) => Promise<void>; onUpdateTable: (oldId: string, table: { id: string; seats: number; zone: string }) => Promise<void>; profiles: TeamProfile[]; onCreateProfile: (profile: { username: string; name: string; role: Role; pin: string }) => Promise<void>; floorPlan: FloorPlanConfig | null; onSaveFloorPlan: (plan: FloorPlanConfig) => Promise<void>; storageMode: 'postgresql' | 'local-json' | 'unknown' }) {
+  return <div className="settings-stack"><section className="panel settings-module"><div><strong>Session active</strong><span>{user?.name} · {user?.role}</span></div><div className="storage-status"><strong>Base partagée</strong><span>{storageMode === 'postgresql' ? 'PostgreSQL Render' : storageMode === 'local-json' ? 'JSON local à cet ordinateur' : 'État de la connexion inconnu'}</span></div><button className="action-button" onClick={onLogout}>Fermer la session</button><button className="text-button" onClick={onSwitchRestaurant}>Changer de restaurant</button></section><ProfilesConfiguration profiles={profiles} onCreate={onCreateProfile} /><MenuConfiguration items={menu} onCreate={onCreateMenuItem} onUpdate={onUpdateMenuItem} /><TableConfiguration tables={tables} onCreate={onCreateTable} onUpdate={onUpdateTable} /><FloorPlanConfiguration tables={tables} floorPlan={floorPlan} onSave={onSaveFloorPlan} /></div>
+}
+
+function ProfilesConfiguration({ profiles, onCreate }: { profiles: TeamProfile[]; onCreate: (profile: { username: string; name: string; role: Role; pin: string }) => Promise<void> }) {
+  const [username, setUsername] = useState('')
+  const [name, setName] = useState('')
+  const [role, setRole] = useState<Role>('server')
+  const [pin, setPin] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const roleNames: Record<Role, string> = { manager: 'Gérant', server: 'Serveur', kitchen: 'Cuisine', cashier: 'Caissier' }
+  const submit = async () => {
+    if (saving) return
+    setSaving(true)
+    setError('')
+    try {
+      await onCreate({ username: username.trim().toLowerCase(), name: name.trim(), role, pin })
+      setUsername(''); setName(''); setPin('')
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Création du profil impossible.') }
+    finally { setSaving(false) }
+  }
+  return <section className="panel profile-config"><div className="module-list-heading"><strong>Profils de l’équipe</strong><span>{profiles.length} utilisateurs</span></div><div className="profile-list">{profiles.map((profile) => <article className="profile-row" key={profile.id}><div><strong>{profile.name}</strong><small>@{profile.username}</small></div><span className="status-pill">{roleNames[profile.role]}</span></article>)}</div><div className="profile-editor"><strong>Créer un profil</strong><div className="profile-editor-fields"><label>Nom d’utilisateur<input autoComplete="off" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="ex. samira" /></label><label>Nom affiché<input value={name} onChange={(event) => setName(event.target.value)} placeholder="ex. Samira Benali" /></label><label>Rôle<select value={role} onChange={(event) => setRole(event.target.value as Role)}><option value="server">Serveur</option><option value="cashier">Caissier</option><option value="kitchen">Cuisine</option><option value="manager">Gérant</option></select></label><label>Code PIN (4 à 12 chiffres)<input type="password" inputMode="numeric" autoComplete="new-password" maxLength={12} value={pin} onChange={(event) => setPin(event.target.value.replace(/\D/g, ''))} /></label><button className="primary-button" disabled={!username.trim() || !name.trim() || pin.length < 4 || saving} onClick={submit}>{saving ? 'Création...' : 'Créer le profil'}</button></div>{error && <p className="login-error">{error}</p>}</div></section>
 }
 
 function TableConfiguration({ tables, onCreate, onUpdate }: { tables: RestaurantTable[]; onCreate: (table: { id: string; seats: number; zone: string }) => Promise<void>; onUpdate: (oldId: string, table: { id: string; seats: number; zone: string }) => Promise<void> }) {
@@ -315,7 +389,45 @@ function FloorPlanConfiguration({ tables, floorPlan, onSave }: { tables: Restaur
     {draft ? <><p className="floor-config-help">{placingTableId ? `Touchez un emplacement pour déplacer ${placingTableId}.` : 'Importez le plan de référence, puis choisissez une table à déplacer.'}</p><FloorPlan tables={tables} tableZones={[...new Set(tables.map((table) => table.zone))]} onSelect={setPlacingTableId} background={draft} positions={draft.positions} placingTableId={placingTableId} onPlace={(id, point) => { setDraft((current) => current ? { ...current, positions: { ...current.positions, [id]: point } } : current); setPlacingTableId('') }} /></> : <p className="floor-config-empty">Importez le plan existant pour créer et enregistrer sa version graphique.</p>}
   </section>
 }
-function LoginScreen({ onLogin }: { onLogin: (user: SessionUser, token: string) => void }) { const [role, setRole] = useState<Role>('manager'); const [pin, setPin] = useState(''); const [error, setError] = useState(''); const [loading, setLoading] = useState(false); const submit = async () => { setLoading(true); setError(''); try { const session = await login(role, pin); onLogin(session.user, session.token) } catch { setError('Code incorrect pour ce rôle') } finally { setLoading(false) } }; return <div className="login-screen"><div className="login-card"><div className="brand login-brand"><span className="brand-mark"><Utensils size={18} /></span><span>Service<span className="brand-accent">Pilot</span></span></div><p className="eyebrow">ACCÈS ÉQUIPE</p><h1>Ouvrir une session</h1><p className="login-subtitle">Choisissez votre poste et saisissez votre code.</p><label>Poste<select value={role} onChange={(event) => setRole(event.target.value as Role)}><option value="manager">Gérante</option><option value="server">Serveur</option><option value="kitchen">Cuisine</option><option value="cashier">Caissier</option></select></label><label>Code d’accès<input type="password" inputMode="numeric" value={pin} onChange={(event) => setPin(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && submit()} placeholder="••••" /></label>{error && <p className="login-error">{error}</p>}<button className="primary-button login-submit" disabled={!pin || loading} onClick={submit}>{loading ? 'Connexion...' : 'Ouvrir la session'}</button></div></div> }
+function RestaurantAccessScreen({ onLogin, onRegister }: { onLogin: (identifier: string, password: string) => Promise<void>; onRegister: (input: { identifier: string; name: string; password: string; managerUsername: string; managerName: string; managerPin: string }) => Promise<void> }) {
+  const [registering, setRegistering] = useState(false)
+  const [identifier, setIdentifier] = useState('')
+  const [restaurantName, setRestaurantName] = useState('')
+  const [password, setPassword] = useState('')
+  const [managerUsername, setManagerUsername] = useState('')
+  const [managerName, setManagerName] = useState('')
+  const [managerPin, setManagerPin] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const submit = async () => {
+    if (loading) return
+    setLoading(true); setError('')
+    try {
+      if (registering) await onRegister({ identifier, name: restaurantName, password, managerUsername, managerName: managerName || managerUsername, managerPin })
+      else await onLogin(identifier, password)
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Connexion impossible.') }
+    finally { setLoading(false) }
+  }
+  return <div className="login-screen"><div className="login-card restaurant-access-card"><div className="brand login-brand"><span className="brand-mark"><Utensils size={18} /></span><span>Service<span className="brand-accent">Pilot</span></span></div><p className="eyebrow">ESPACE RESTAURANT</p><h1>{registering ? 'Créer un établissement' : 'Accéder à votre restaurant'}</h1><p className="login-subtitle">{registering ? 'Créez l’accès restaurant et le premier profil gérant.' : 'Saisissez l’identifiant et le mot de passe de votre établissement.'}</p><div className="auth-mode-tabs"><button className={!registering ? 'active' : ''} onClick={() => { setRegistering(false); setError('') }}>Connexion</button><button className={registering ? 'active' : ''} onClick={() => { setRegistering(true); setError('') }}>Créer un restaurant</button></div>{registering && <label>Nom du restaurant<input value={restaurantName} onChange={(event) => setRestaurantName(event.target.value)} placeholder="Le Mijoté" /></label>}<label>Identifiant restaurant<input autoCapitalize="none" autoComplete="username" value={identifier} onChange={(event) => setIdentifier(event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-'))} placeholder="ex. le-mijote-paris" /></label>{registering && <><p className="auth-help">Pour rattacher les données locales existantes, utilise l’identifiant <strong>restaurant-demo</strong>.</p><label>Nom d’utilisateur du gérant<input autoCapitalize="none" autoComplete="off" value={managerUsername} onChange={(event) => setManagerUsername(event.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, ''))} placeholder="ex. louise" /></label><label>Nom affiché du gérant<input value={managerName} onChange={(event) => setManagerName(event.target.value)} placeholder="ex. Louise Martin" /></label><label>Code PIN gérant (4 à 12 chiffres)<input type="password" inputMode="numeric" autoComplete="new-password" maxLength={12} value={managerPin} onChange={(event) => setManagerPin(event.target.value.replace(/\D/g, ''))} /></label></>}<label>{registering ? 'Mot de passe restaurant (8 caractères minimum)' : 'Mot de passe restaurant'}<input type="password" autoComplete={registering ? 'new-password' : 'current-password'} value={password} onChange={(event) => setPassword(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && submit()} /></label>{error && <p className="login-error">{error}</p>}<button className="primary-button login-submit" disabled={loading || !identifier || !password || (registering && (!restaurantName.trim() || !managerUsername.trim() || managerPin.length < 4 || password.length < 8))} onClick={submit}>{loading ? 'Connexion...' : registering ? 'Créer le restaurant' : 'Continuer'}</button></div></div>
+}
+
+function LoginScreen({ restaurant, profiles, onLogin, onSwitchRestaurant }: { restaurant: RestaurantContext; profiles: TeamProfile[]; onLogin: (username: string, pin: string) => Promise<void>; onSwitchRestaurant: () => void }) {
+  const [requestedUsername, setRequestedUsername] = useState('')
+  const [pin, setPin] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const roleNames: Record<Role, string> = { manager: 'Gérant', server: 'Serveur', kitchen: 'Cuisine', cashier: 'Caissier' }
+  const username = profiles.some((profile) => profile.username === requestedUsername) ? requestedUsername : profiles[0]?.username || ''
+  const selected = profiles.find((profile) => profile.username === username)
+  const submit = async () => {
+    if (!selected || loading) return
+    setLoading(true); setError('')
+    try { await onLogin(username, pin) }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'Profil ou code PIN incorrect.') }
+    finally { setLoading(false) }
+  }
+  return <div className="login-screen"><div className="login-card"><div className="brand login-brand"><span className="brand-mark"><Utensils size={18} /></span><span>Service<span className="brand-accent">Pilot</span></span></div><p className="eyebrow">{restaurant.name}</p><h1>Ouvrir une session</h1><p className="login-subtitle">Choisissez votre profil et saisissez votre code PIN.</p><label>Profil<select value={username} onChange={(event) => { setRequestedUsername(event.target.value); setPin('') }} disabled={!profiles.length}>{profiles.map((profile) => <option key={profile.id} value={profile.username}>{profile.name} · {roleNames[profile.role]}</option>)}</select></label>{selected && <p className="selected-profile-name">@{selected.username} · {roleNames[selected.role]}</p>}<label>Code PIN<input type="password" inputMode="numeric" autoComplete="current-password" value={pin} onChange={(event) => setPin(event.target.value.replace(/\D/g, ''))} onKeyDown={(event) => event.key === 'Enter' && submit()} placeholder="••••" /></label>{!profiles.length && <p className="login-error">Aucun profil disponible. Contactez le gérant de ce restaurant.</p>}{error && <p className="login-error">{error}</p>}<button className="primary-button login-submit" disabled={!selected || pin.length < 4 || loading} onClick={submit}>{loading ? 'Connexion...' : 'Ouvrir la session'}</button><button className="switch-restaurant-button" onClick={onSwitchRestaurant}>Changer de restaurant</button></div></div>
+}
 function ReservationModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (data: { name: string; time: string; people: number }) => void }) { const [name, setName] = useState(''); const [time, setTime] = useState('19:30'); const [people, setPeople] = useState(4); return <div className="modal-backdrop" onClick={onClose}><div className="modal" onClick={(event) => event.stopPropagation()}><div className="modal-heading"><div><p className="eyebrow">NOUVEAU RENDEZ-VOUS</p><h2>Ajouter une réservation</h2></div><button onClick={onClose} aria-label="Fermer">×</button></div><label>Nom du client<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Ex. Camille Durand" /></label><div className="modal-fields"><label>Date<input type="date" defaultValue="2026-09-24" /></label><label>Heure<input type="time" value={time} onChange={(event) => setTime(event.target.value)} /></label></div><label>Nombre de personnes<select value={people} onChange={(event) => setPeople(Number(event.target.value))}><option value="2">2 personnes</option><option value="4">4 personnes</option><option value="6">6 personnes</option><option value="8">8 personnes</option></select></label><button className="primary-button modal-submit" disabled={!name.trim()} onClick={() => onSubmit({ name, time, people })}>Créer la réservation <ArrowUpRight size={16} /></button></div></div> }
 function ServerOrdersModule({ orders, onStatus }: { orders: Dashboard['orders']; onStatus: (id: string, status: string) => void }) {
   const active = orders.filter((order) => order.status === 'ready' || order.status === 'served')
@@ -415,8 +527,8 @@ function InvoiceStockModule({ items, receipts, onUpdate, onAnalyze, onCreateDraf
   </div>
 }
 
-function InvoiceComposer({ order, onClose, onCreate }: { order: Order; onClose: () => void; onCreate: (orderId: string, details: Omit<Parameters<typeof createInvoice>[0], 'orderId'>) => Promise<Invoice | null> }) {
-  const [seller, setSeller] = useState({ name: 'Le Mijoté', address: '', siren: '', vatNumber: '' })
+function InvoiceComposer({ order, restaurantName, onClose, onCreate }: { order: Order; restaurantName: string; onClose: () => void; onCreate: (orderId: string, details: Omit<Parameters<typeof createInvoice>[0], 'orderId'>) => Promise<Invoice | null> }) {
+  const [seller, setSeller] = useState({ name: restaurantName, address: '', siren: '', vatNumber: '' })
   const [buyer, setBuyer] = useState({ name: '', address: '', email: '' })
   const [lines, setLines] = useState<Array<{ name: string; quantity: number; unitPrice: number; vatRate: number }>>(() => order.lines?.length ? order.lines.map((line) => ({ name: line.name, quantity: line.quantity, unitPrice: line.price, vatRate: 10 })) : [{ name: `Commande table ${order.table}`, quantity: 1, unitPrice: order.amount, vatRate: 10 }])
   const [saving, setSaving] = useState(false)
@@ -429,11 +541,11 @@ function InvoiceComposer({ order, onClose, onCreate }: { order: Order; onClose: 
   return <div className="modal-backdrop" onClick={onClose}><section className="modal invoice-composer" onClick={(event) => event.stopPropagation()}><header className="modal-heading"><div><p className="eyebrow">FACTURATION</p><h2>Créer la facture</h2></div><button onClick={onClose} aria-label="Fermer">×</button></header><div className="invoice-form-grid"><label>Raison sociale<input value={seller.name} onChange={(event) => setSeller({ ...seller, name: event.target.value })} /></label><label>SIREN / SIRET<input inputMode="numeric" value={seller.siren} onChange={(event) => setSeller({ ...seller, siren: event.target.value })} placeholder="9 ou 14 chiffres" /></label><label className="wide-field">Adresse vendeur<input value={seller.address} onChange={(event) => setSeller({ ...seller, address: event.target.value })} /></label><label>TVA intracommunautaire<input value={seller.vatNumber} onChange={(event) => setSeller({ ...seller, vatNumber: event.target.value })} /></label><label>Nom client<input value={buyer.name} onChange={(event) => setBuyer({ ...buyer, name: event.target.value })} /></label><label className="wide-field">Adresse client<input value={buyer.address} onChange={(event) => setBuyer({ ...buyer, address: event.target.value })} /></label><label className="wide-field">E-mail client (facultatif)<input type="email" value={buyer.email} onChange={(event) => setBuyer({ ...buyer, email: event.target.value })} /></label></div><div className="invoice-composer-lines"><strong>Articles · commande #{order.id} · Table {order.table}</strong>{lines.map((line, index) => <div className="invoice-composer-line" key={`${line.name}-${index}`}><span>{line.name}</span><span>{line.quantity} × {line.unitPrice.toFixed(2)} €</span><select aria-label={`TVA ${line.name}`} value={line.vatRate} onChange={(event) => setLines((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, vatRate: Number(event.target.value) } : item))}><option value="0">TVA 0%</option><option value="5.5">TVA 5,5%</option><option value="10">TVA 10%</option><option value="20">TVA 20%</option></select></div>)}<div className="invoice-form-total"><strong>Total TTC encaissé</strong><strong>{total.toFixed(2).replace('.', ',')} €</strong></div></div><p className="invoice-legal-note">La facture sera numérotée à sa création. Vérifiez le vendeur, le SIREN/SIRET, le client et les taux de TVA avant émission.</p><footer className="invoice-composer-actions"><button className="action-button" onClick={onClose}>Annuler</button><button className="primary-button" disabled={saving || !seller.name.trim() || !seller.address.trim() || !/^\d{9,14}$/.test(seller.siren.replace(/\s/g, '')) || !buyer.name.trim()} onClick={create}>{saving ? 'Création...' : 'Créer la facture'}</button></footer></section></div>
 }
 
-function PrintPreview({ document, onClose, onEmail }: { document: { kind: 'ticket'; order: Order } | { kind: 'invoice'; invoice: Invoice }; onClose: () => void; onEmail?: () => Promise<boolean> }) {
+function PrintPreview({ document, restaurantName, onClose, onEmail }: { document: { kind: 'ticket'; order: Order } | { kind: 'invoice'; invoice: Invoice }; restaurantName: string; onClose: () => void; onEmail?: () => Promise<boolean> }) {
   const [sending, setSending] = useState(false)
   const [emailMessage, setEmailMessage] = useState('')
   const invoice = document.kind === 'invoice' ? document.invoice : null
   const order = document.kind === 'ticket' ? document.order : null
   const send = async () => { if (!onEmail || sending) return; setSending(true); setEmailMessage(''); try { setEmailMessage(await onEmail() ? 'Facture envoyée.' : 'Échec de l’envoi. Vérifiez le message de service et la configuration SMTP.') } finally { setSending(false) } }
-  return <div className="modal-backdrop print-backdrop" onClick={onClose}><section className="modal print-modal" onClick={(event) => event.stopPropagation()}><div className="print-actions"><strong>{invoice ? `Facture ${invoice.invoiceNumber}` : `Ticket · Table ${order?.table}`}</strong><button className="action-button" onClick={() => window.print()}>Imprimer</button>{invoice && onEmail && <button className="primary-button" disabled={sending || !invoice.buyer.email} onClick={send}>{sending ? 'Envoi...' : 'Envoyer par e-mail'}</button>}<button className="text-button" onClick={onClose}>Fermer</button></div>{emailMessage && <p className="email-send-message" role="status">{emailMessage}</p>}<article className="printed-document"><header><strong>{invoice?.seller.name || 'Le Mijoté'}</strong><span>{invoice?.seller.address || 'Ticket de caisse'}</span>{invoice?.seller.siren && <span>SIREN/SIRET : {invoice.seller.siren}</span>}</header>{invoice ? <><h1>FACTURE</h1><p><strong>{invoice.invoiceNumber}</strong> · {new Date(invoice.issuedAt).toLocaleDateString('fr-FR')}</p><p>Client : {invoice.buyer.name}{invoice.buyer.address ? ` · ${invoice.buyer.address}` : ''}</p><table><thead><tr><th>Désignation</th><th>Qté</th><th>PU TTC</th><th>TVA</th><th>Total</th></tr></thead><tbody>{invoice.lines.map((line, index) => <tr key={index}><td>{line.name}</td><td>{line.quantity}</td><td>{line.unitPrice.toFixed(2)} €</td><td>{line.vatRate}%</td><td>{line.grossAmount.toFixed(2)} €</td></tr>)}</tbody></table><div className="printed-totals"><span>Total HT : {invoice.totalNet.toFixed(2)} €</span><span>TVA : {invoice.totalVat.toFixed(2)} €</span><strong>Total TTC : {invoice.totalGross.toFixed(2)} €</strong></div></> : <><h1>TICKET DE CAISSE</h1><p>{new Date(order!.createdAt).toLocaleString('fr-FR')} · Table {order!.table}</p><table><thead><tr><th>Désignation</th><th>Qté</th><th>Total</th></tr></thead><tbody>{(order!.lines || []).map((line, index) => <tr key={index}><td>{line.name}</td><td>{line.quantity}</td><td>{(line.quantity * line.price).toFixed(2)} €</td></tr>)}</tbody></table><div className="printed-totals"><strong>Total : {order!.amount.toFixed(2)} €</strong><span>Règlement : {order!.paymentMethod === 'cash' ? 'Espèces' : 'CB / TPE'}</span></div></>}<footer>Merci de votre visite.</footer></article></section></div>
+  return <div className="modal-backdrop print-backdrop" onClick={onClose}><section className="modal print-modal" onClick={(event) => event.stopPropagation()}><div className="print-actions"><strong>{invoice ? `Facture ${invoice.invoiceNumber}` : `Ticket · Table ${order?.table}`}</strong><button className="action-button" onClick={() => window.print()}>Imprimer</button>{invoice && onEmail && <button className="primary-button" disabled={sending || !invoice.buyer.email} onClick={send}>{sending ? 'Envoi...' : 'Envoyer par e-mail'}</button>}<button className="text-button" onClick={onClose}>Fermer</button></div>{emailMessage && <p className="email-send-message" role="status">{emailMessage}</p>}<article className="printed-document"><header><strong>{invoice?.seller.name || restaurantName}</strong><span>{invoice?.seller.address || 'Ticket de caisse'}</span>{invoice?.seller.siren && <span>SIREN/SIRET : {invoice.seller.siren}</span>}</header>{invoice ? <><h1>FACTURE</h1><p><strong>{invoice.invoiceNumber}</strong> · {new Date(invoice.issuedAt).toLocaleDateString('fr-FR')}</p><p>Client : {invoice.buyer.name}{invoice.buyer.address ? ` · ${invoice.buyer.address}` : ''}</p><table><thead><tr><th>Désignation</th><th>Qté</th><th>PU TTC</th><th>TVA</th><th>Total</th></tr></thead><tbody>{invoice.lines.map((line, index) => <tr key={index}><td>{line.name}</td><td>{line.quantity}</td><td>{line.unitPrice.toFixed(2)} €</td><td>{line.vatRate}%</td><td>{line.grossAmount.toFixed(2)} €</td></tr>)}</tbody></table><div className="printed-totals"><span>Total HT : {invoice.totalNet.toFixed(2)} €</span><span>TVA : {invoice.totalVat.toFixed(2)} €</span><strong>Total TTC : {invoice.totalGross.toFixed(2)} €</strong></div></> : <><h1>TICKET DE CAISSE</h1><p>{new Date(order!.createdAt).toLocaleString('fr-FR')} · Table {order!.table}</p><table><thead><tr><th>Désignation</th><th>Qté</th><th>Total</th></tr></thead><tbody>{(order!.lines || []).map((line, index) => <tr key={index}><td>{line.name}</td><td>{line.quantity}</td><td>{(line.quantity * line.price).toFixed(2)} €</td></tr>)}</tbody></table><div className="printed-totals"><strong>Total : {order!.amount.toFixed(2)} €</strong><span>Règlement : {order!.paymentMethod === 'cash' ? 'Espèces' : 'CB / TPE'}</span></div></>}<footer>Merci de votre visite.</footer></article></section></div>
 }

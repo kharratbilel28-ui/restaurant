@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local multi-tenant credentials and data
+db/tenant-credentials.json
+db/tenants/

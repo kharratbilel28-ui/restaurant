@@ -12,14 +12,17 @@ export type Dashboard = { reservations: Reservation[]; orders: Order[]; tables: 
 export type InvoiceLine = { name: string; quantity: number; unitPrice: number; vatRate: number; netAmount: number; vatAmount: number; grossAmount: number }
 export type Invoice = { id: string; invoiceNumber: string; orderId: string; issuedAt: string; seller: { name: string; address: string; siren: string; vatNumber: string }; buyer: { name: string; address: string; email: string }; lines: InvoiceLine[]; totalNet: number; totalVat: number; totalGross: number; emailedAt?: string }
 export type Role = 'manager' | 'server' | 'kitchen' | 'cashier'
-export type SessionUser = { id: string; name: string; role: Role }
+export type SessionUser = { id: string; username?: string; name: string; role: Role }
 export type Session = { token: string; expiresAt: number; user: SessionUser }
+export type RestaurantContext = { id: string; identifier: string; name: string }
+export type TeamProfile = { id: string; username: string; name: string; role: Role }
 
 const apiUrl = import.meta.env.VITE_API_URL || '/api'
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const token = localStorage.getItem('restaurant-token')
-  const response = await fetch(`${apiUrl}${path}`, { headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, ...options })
+  const accessToken = localStorage.getItem('restaurant-access-token')
+  const response = await fetch(`${apiUrl}${path}`, { headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(accessToken ? { 'X-Restaurant-Access': accessToken } : {}) }, ...options })
   if (!response.ok) {
     if (response.status === 401) localStorage.removeItem('restaurant-token')
     throw new Error((await response.json()).error || 'Erreur API')
@@ -30,7 +33,13 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const getDashboard = () => request<Dashboard>('/dashboard')
 export const getHealth = () => request<{ ok: boolean; service: string; storage: 'postgresql' | 'local-json' }>('/health')
-export const login = (role: Role, pin: string) => request<Session>('/auth/login', { method: 'POST', body: JSON.stringify({ role, pin }) })
+export const registerRestaurant = (input: { identifier: string; name: string; password: string; managerUsername: string; managerName: string; managerPin: string }) => request<{ token: string; restaurant: RestaurantContext }>('/auth/register-restaurant', { method: 'POST', body: JSON.stringify(input) })
+export const loginRestaurant = (identifier: string, password: string) => request<{ token: string; restaurant: RestaurantContext }>('/auth/restaurant', { method: 'POST', body: JSON.stringify({ identifier, password }) })
+export const getRestaurantContext = () => request<{ restaurant: RestaurantContext }>('/auth/restaurant')
+export const logoutRestaurant = () => request<void>('/auth/restaurant', { method: 'DELETE' })
+export const getProfiles = () => request<TeamProfile[]>('/auth/profiles')
+export const createProfile = (profile: { username: string; name: string; role: Role; pin: string }) => request<TeamProfile>('/profiles', { method: 'POST', body: JSON.stringify(profile) })
+export const login = (username: string, pin: string) => request<Session>('/auth/login', { method: 'POST', body: JSON.stringify({ username, pin }) })
 export const getSession = () => request<Omit<Session, 'token'>>('/auth/me')
 export const logout = () => request<void>('/auth/logout', { method: 'POST' })
 export const createReservation = (reservation: { name: string; time: string; people: number; table?: string }) => request<Reservation>('/reservations', { method: 'POST', body: JSON.stringify(reservation) })

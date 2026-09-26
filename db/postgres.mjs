@@ -3,8 +3,8 @@ import { Pool } from 'pg'
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined })
 
 const schema = [
-  `CREATE TABLE IF NOT EXISTS restaurants (id text PRIMARY KEY, name text NOT NULL, created_at timestamptz NOT NULL DEFAULT now())`,
-  `CREATE TABLE IF NOT EXISTS users (restaurant_id text NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE, id text NOT NULL, name text NOT NULL, role text NOT NULL, pin text NOT NULL, PRIMARY KEY (restaurant_id, id))`,
+  `CREATE TABLE IF NOT EXISTS restaurants (id text PRIMARY KEY, identifier text UNIQUE, name text NOT NULL, password_hash text, created_at timestamptz NOT NULL DEFAULT now())`,
+  `CREATE TABLE IF NOT EXISTS users (restaurant_id text NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE, id text NOT NULL, username text NOT NULL, name text NOT NULL, role text NOT NULL, pin text NOT NULL, PRIMARY KEY (restaurant_id, id))`,
   `CREATE TABLE IF NOT EXISTS reservations (restaurant_id text NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE, id text NOT NULL, reservation_time text NOT NULL, customer_name text NOT NULL, people integer NOT NULL, table_name text NOT NULL, status text NOT NULL, PRIMARY KEY (restaurant_id, id))`,
   `CREATE TABLE IF NOT EXISTS dining_tables (restaurant_id text NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE, id text NOT NULL, seats integer NOT NULL, status text NOT NULL, zone text NOT NULL, PRIMARY KEY (restaurant_id, id))`,
   `CREATE TABLE IF NOT EXISTS menu_items (restaurant_id text NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE, id text NOT NULL, name text NOT NULL, price numeric(10,2) NOT NULL, image text NOT NULL DEFAULT '', active boolean NOT NULL DEFAULT true, PRIMARY KEY (restaurant_id, id))`,
@@ -45,6 +45,13 @@ function withDefaults(state) {
 
 export async function initPostgres(fallbackState) {
   for (const statement of schema) await pool.query(statement)
+  await pool.query('ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS identifier text')
+  await pool.query('ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS password_hash text')
+  await pool.query('UPDATE restaurants SET identifier = id WHERE identifier IS NULL')
+  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS restaurants_identifier_unique ON restaurants (identifier)')
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS username text')
+  await pool.query('UPDATE users SET username = id WHERE username IS NULL')
+  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS users_username_unique ON users (restaurant_id, username)')
   const existing = await pool.query('SELECT id FROM restaurants WHERE id = $1', ['restaurant-demo'])
   if (existing.rowCount > 0) return
 
@@ -58,8 +65,8 @@ export async function initPostgres(fallbackState) {
   try {
     await client.query('BEGIN')
     const state = withDefaults(fallbackState)
-    await client.query('INSERT INTO restaurants (id, name) VALUES ($1, $2)', ['restaurant-demo', 'Le Mijoté'])
-    for (const user of state.users) await client.query('INSERT INTO users (restaurant_id, id, name, role, pin) VALUES ($1, $2, $3, $4, $5)', ['restaurant-demo', user.id, user.name, user.role, user.pin])
+    await client.query('INSERT INTO restaurants (id, identifier, name) VALUES ($1, $2, $3)', ['restaurant-demo', 'restaurant-demo', 'Le Mijoté'])
+    for (const user of state.users) await client.query('INSERT INTO users (restaurant_id, id, username, name, role, pin) VALUES ($1, $2, $3, $4, $5, $6)', ['restaurant-demo', user.id, user.username || user.id, user.name, user.role, user.pin])
     for (const item of state.reservations) await client.query('INSERT INTO reservations (restaurant_id, id, reservation_time, customer_name, people, table_name, status) VALUES ($1, $2, $3, $4, $5, $6, $7)', ['restaurant-demo', item.id, item.time, item.name, item.people, item.table || 'À attribuer', item.status || 'confirmed'])
     for (const table of state.tables) await client.query('INSERT INTO dining_tables (restaurant_id, id, seats, status, zone) VALUES ($1, $2, $3, $4, $5)', ['restaurant-demo', table.id, table.seats, table.status, table.zone])
     for (const item of state.menu) await client.query('INSERT INTO menu_items (restaurant_id, id, name, price, image, active) VALUES ($1, $2, $3, $4, $5, $6)', ['restaurant-demo', item.id, item.name, item.price, item.image || '', item.active !== false])
@@ -86,9 +93,46 @@ export async function initPostgres(fallbackState) {
   }
 }
 
-export async function findUserByCredentials(role, pin) {
-  const result = await pool.query('SELECT id, restaurant_id, name, role FROM users WHERE role = $1 AND pin = $2 LIMIT 1', [role, pin])
+export async function findRestaurantByIdentifier(identifier) {
+  const result = await pool.query('SELECT id, identifier, name, password_hash AS "passwordHash" FROM restaurants WHERE identifier = $1', [identifier])
   return result.rows[0] || null
+}
+
+export async function registerRestaurantPostgres({ id, identifier, name, passwordHash, manager }) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const existing = await client.query('SELECT id, password_hash FROM restaurants WHERE id = $1 OR identifier = $2 FOR UPDATE', [id, identifier])
+    if (existing.rowCount && existing.rows[0].password_hash) {
+      const error = new Error('Cet identifiant restaurant est déjà utilisé')
+      error.code = 'RESTAURANT_EXISTS'
+      throw error
+    }
+    if (existing.rowCount) await client.query('UPDATE restaurants SET identifier = $1, name = $2, password_hash = $3 WHERE id = $4', [identifier, name, passwordHash, existing.rows[0].id])
+    else await client.query('INSERT INTO restaurants (id, identifier, name, password_hash) VALUES ($1, $2, $3, $4)', [id, identifier, name, passwordHash])
+    const restaurantId = existing.rows[0]?.id || id
+    await client.query('INSERT INTO users (restaurant_id, id, username, name, role, pin) VALUES ($1, $2, $3, $4, $5, $6)', [restaurantId, manager.id, manager.username, manager.name, 'manager', manager.pin])
+    await client.query('COMMIT')
+    return { id: restaurantId, identifier, name }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally { client.release() }
+}
+
+export async function findUserByCredentials(restaurantId, username, pin) {
+  const result = await pool.query('SELECT id, restaurant_id, username, name, role FROM users WHERE restaurant_id = $1 AND username = $2 AND pin = $3 LIMIT 1', [restaurantId, username, pin])
+  return result.rows[0] || null
+}
+
+export async function listProfilesPostgres(restaurantId) {
+  const result = await pool.query('SELECT id, username, name, role FROM users WHERE restaurant_id = $1 ORDER BY name', [restaurantId])
+  return result.rows
+}
+
+export async function createProfilePostgres(restaurantId, profile) {
+  const result = await pool.query('INSERT INTO users (restaurant_id, id, username, name, role, pin) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, username, name, role', [restaurantId, profile.id, profile.username, profile.name, profile.role, profile.pin])
+  return result.rows[0]
 }
 
 export async function getInvoicePostgres(restaurantId, id) {
