@@ -8,6 +8,7 @@ const schema = [
   `CREATE TABLE IF NOT EXISTS reservations (restaurant_id text NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE, id text NOT NULL, reservation_time text NOT NULL, customer_name text NOT NULL, people integer NOT NULL, table_name text NOT NULL, status text NOT NULL, PRIMARY KEY (restaurant_id, id))`,
   `CREATE TABLE IF NOT EXISTS dining_tables (restaurant_id text NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE, id text NOT NULL, seats integer NOT NULL, status text NOT NULL, zone text NOT NULL, PRIMARY KEY (restaurant_id, id))`,
   `CREATE TABLE IF NOT EXISTS menu_items (restaurant_id text NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE, id text NOT NULL, name text NOT NULL, price numeric(10,2) NOT NULL, image text NOT NULL DEFAULT '', active boolean NOT NULL DEFAULT true, PRIMARY KEY (restaurant_id, id))`,
+  `CREATE TABLE IF NOT EXISTS floor_plan_configs (restaurant_id text PRIMARY KEY REFERENCES restaurants(id) ON DELETE CASCADE, file_name text NOT NULL, pdf_data text NOT NULL, positions jsonb NOT NULL DEFAULT '{}'::jsonb, updated_at timestamptz NOT NULL DEFAULT now())`,
   `CREATE TABLE IF NOT EXISTS inventory_items (restaurant_id text NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE, id text NOT NULL, name text NOT NULL, quantity numeric(12,3) NOT NULL, unit text NOT NULL, minimum numeric(12,3) NOT NULL, supplier text NOT NULL, PRIMARY KEY (restaurant_id, id))`,
   `CREATE TABLE IF NOT EXISTS stock_withdrawals (restaurant_id text NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE, id text NOT NULL, reason text NOT NULL, note text NOT NULL DEFAULT '', created_by text NOT NULL DEFAULT '', created_at timestamptz NOT NULL, PRIMARY KEY (restaurant_id, id))`,
   `CREATE TABLE IF NOT EXISTS stock_withdrawal_items (restaurant_id text NOT NULL, withdrawal_id text NOT NULL, line_index integer NOT NULL, inventory_item_id text NOT NULL, name text NOT NULL, quantity numeric(12,3) NOT NULL, unit text NOT NULL, PRIMARY KEY (restaurant_id, withdrawal_id, line_index), FOREIGN KEY (restaurant_id, withdrawal_id) REFERENCES stock_withdrawals(restaurant_id, id) ON DELETE CASCADE)`,
@@ -20,6 +21,7 @@ const schema = [
 function withDefaults(state) {
   state.reservations ||= []
   state.users ||= []
+  state.floorPlan ||= null
   state.orders ||= []
   state.tables ||= []
   state.inventory ||= [
@@ -55,6 +57,7 @@ export async function initPostgres(fallbackState) {
     for (const item of state.reservations) await client.query('INSERT INTO reservations (restaurant_id, id, reservation_time, customer_name, people, table_name, status) VALUES ($1, $2, $3, $4, $5, $6, $7)', ['restaurant-demo', item.id, item.time, item.name, item.people, item.table || 'À attribuer', item.status || 'confirmed'])
     for (const table of state.tables) await client.query('INSERT INTO dining_tables (restaurant_id, id, seats, status, zone) VALUES ($1, $2, $3, $4, $5)', ['restaurant-demo', table.id, table.seats, table.status, table.zone])
     for (const item of state.menu) await client.query('INSERT INTO menu_items (restaurant_id, id, name, price, image, active) VALUES ($1, $2, $3, $4, $5, $6)', ['restaurant-demo', item.id, item.name, item.price, item.image || '', item.active !== false])
+    if (state.floorPlan?.pdfData) await client.query('INSERT INTO floor_plan_configs (restaurant_id, file_name, pdf_data, positions) VALUES ($1, $2, $3, $4::jsonb)', ['restaurant-demo', state.floorPlan.fileName, state.floorPlan.pdfData, JSON.stringify(state.floorPlan.positions || {})])
     for (const item of state.inventory) await client.query('INSERT INTO inventory_items (restaurant_id, id, name, quantity, unit, minimum, supplier) VALUES ($1, $2, $3, $4, $5, $6, $7)', ['restaurant-demo', item.id, item.name, item.quantity, item.unit, item.minimum, item.supplier || ''])
     for (const order of state.orders) {
       await client.query('INSERT INTO orders (restaurant_id, id, table_name, item_count, amount, status, note, payment_method, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)', ['restaurant-demo', order.id, order.table, order.items, order.amount, order.status === 'kitchen' ? 'received' : order.status, order.note || '', order.paymentMethod || null, order.createdAt])
@@ -81,7 +84,7 @@ export async function findUserByCredentials(role, pin) {
 export async function readPostgres(restaurantId) {
   const client = await pool.connect()
   try {
-    const [reservations, users, orders, tables, inventory, menu, withdrawals] = await Promise.all([
+    const [reservations, users, orders, tables, inventory, menu, withdrawals, floorPlan] = await Promise.all([
       client.query('SELECT id, reservation_time AS time, customer_name AS name, people, table_name AS "table", status FROM reservations WHERE restaurant_id = $1 ORDER BY reservation_time', [restaurantId]),
       client.query('SELECT id, name, role, pin FROM users WHERE restaurant_id = $1', [restaurantId]),
       client.query('SELECT id, table_name AS "table", item_count AS items, amount, status, note, payment_method AS "paymentMethod", created_at AS "createdAt" FROM orders WHERE restaurant_id = $1 ORDER BY created_at DESC', [restaurantId]),
@@ -89,6 +92,7 @@ export async function readPostgres(restaurantId) {
       client.query('SELECT id, name, quantity, unit, minimum, supplier FROM inventory_items WHERE restaurant_id = $1 ORDER BY name', [restaurantId]),
       client.query('SELECT id, name, price, image, active FROM menu_items WHERE restaurant_id = $1 ORDER BY name', [restaurantId]),
       client.query('SELECT id, reason, note, created_by AS "createdBy", created_at AS "createdAt" FROM stock_withdrawals WHERE restaurant_id = $1 ORDER BY created_at DESC', [restaurantId]),
+      client.query('SELECT file_name AS "fileName", pdf_data AS "pdfData", positions FROM floor_plan_configs WHERE restaurant_id = $1', [restaurantId]),
     ])
     const [lines, withdrawalLines] = await Promise.all([
       client.query('SELECT order_id, name, quantity, price FROM order_lines WHERE restaurant_id = $1 ORDER BY order_id, line_index', [restaurantId]),
@@ -114,6 +118,7 @@ export async function readPostgres(restaurantId) {
       inventory: inventory.rows.map((item) => ({ ...item, quantity: Number(item.quantity), minimum: Number(item.minimum) })),
       menu: menu.rows.map((item) => ({ ...item, price: Number(item.price) })),
       stockWithdrawals: withdrawals.rows.map((withdrawal) => ({ ...withdrawal, items: withdrawalItems.get(withdrawal.id) || [] })),
+      floorPlan: floorPlan.rows[0] || null,
     }
   } finally {
     client.release()
@@ -127,6 +132,7 @@ export async function savePostgres(restaurantId, state) {
     for (const item of state.reservations) await client.query('INSERT INTO reservations (restaurant_id, id, reservation_time, customer_name, people, table_name, status) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (restaurant_id, id) DO UPDATE SET reservation_time = EXCLUDED.reservation_time, customer_name = EXCLUDED.customer_name, people = EXCLUDED.people, table_name = EXCLUDED.table_name, status = EXCLUDED.status', [restaurantId, item.id, item.time, item.name, item.people, item.table || 'À attribuer', item.status || 'confirmed'])
     for (const table of state.tables) await client.query('INSERT INTO dining_tables (restaurant_id, id, seats, status, zone) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (restaurant_id, id) DO UPDATE SET seats = EXCLUDED.seats, status = EXCLUDED.status, zone = EXCLUDED.zone', [restaurantId, table.id, table.seats, table.status, table.zone])
     for (const item of state.menu) await client.query('INSERT INTO menu_items (restaurant_id, id, name, price, image, active) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (restaurant_id, id) DO UPDATE SET name = EXCLUDED.name, price = EXCLUDED.price, image = EXCLUDED.image, active = EXCLUDED.active', [restaurantId, item.id, item.name, item.price, item.image || '', item.active !== false])
+    if (state.floorPlan?.pdfData) await client.query('INSERT INTO floor_plan_configs (restaurant_id, file_name, pdf_data, positions) VALUES ($1, $2, $3, $4::jsonb) ON CONFLICT (restaurant_id) DO UPDATE SET file_name = EXCLUDED.file_name, pdf_data = EXCLUDED.pdf_data, positions = EXCLUDED.positions, updated_at = now()', [restaurantId, state.floorPlan.fileName, state.floorPlan.pdfData, JSON.stringify(state.floorPlan.positions || {})])
     for (const item of state.inventory) await client.query('INSERT INTO inventory_items (restaurant_id, id, name, quantity, unit, minimum, supplier) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (restaurant_id, id) DO UPDATE SET name = EXCLUDED.name, quantity = EXCLUDED.quantity, unit = EXCLUDED.unit, minimum = EXCLUDED.minimum, supplier = EXCLUDED.supplier', [restaurantId, item.id, item.name, item.quantity, item.unit, item.minimum, item.supplier || ''])
     for (const order of state.orders) {
       await client.query('INSERT INTO orders (restaurant_id, id, table_name, item_count, amount, status, note, payment_method, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (restaurant_id, id) DO UPDATE SET table_name = EXCLUDED.table_name, item_count = EXCLUDED.item_count, amount = EXCLUDED.amount, status = EXCLUDED.status, note = EXCLUDED.note, payment_method = EXCLUDED.payment_method', [restaurantId, order.id, order.table, order.items, order.amount, order.status, order.note || '', order.paymentMethod || null, order.createdAt])

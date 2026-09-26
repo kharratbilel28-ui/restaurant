@@ -5,6 +5,7 @@ export type Order = { id: string; table: string; items: number; amount: number; 
 export type InventoryItem = { id: string; name: string; quantity: number; unit: string; minimum: number; supplier: string }
 export type StockWithdrawal = { id: string; reason: string; note: string; createdAt: string; items: { inventoryItemId: string; name: string; quantity: number; unit: string }[] }
 export type MenuItem = { id: string; name: string; price: number; image: string; active: boolean }
+export type FloorPlanConfig = { fileName: string; pdfData: string; positions: Record<string, { x: number; y: number }> }
 export type Dashboard = { reservations: Reservation[]; orders: Order[]; tables: RestaurantTable[]; stats: { reservations: number; covers: number; revenue: number; averageDuration: string } }
 export type Role = 'manager' | 'server' | 'kitchen' | 'cashier'
 export type SessionUser = { id: string; name: string; role: Role }
@@ -37,3 +38,6 @@ export const updateInventory = (id: string, quantity: number) => request<Invento
 export const createStockWithdrawal = (items: { inventoryItemId: string; quantity: number }[], note: string) => request<{ withdrawal: StockWithdrawal; inventory: InventoryItem[] }>('/inventory/withdrawals', { method: 'POST', body: JSON.stringify({ items, note }) })
 export const getMenu = () => request<MenuItem[]>('/menu')
 export const createMenuItem = (item: { name: string; price: number; image: string }) => request<MenuItem>('/menu', { method: 'POST', body: JSON.stringify(item) })
+export const updateMenuItem = (id: string, item: { name: string; price: number; image: string; active: boolean }) => request<MenuItem>(`/menu/${id}`, { method: 'PATCH', body: JSON.stringify(item) })
+export const getFloorPlan = () => request<FloorPlanConfig | null>('/floor-plan')
+export const saveFloorPlan = (plan: FloorPlanConfig) => request<FloorPlanConfig>('/floor-plan', { method: 'PUT', body: JSON.stringify(plan) })
