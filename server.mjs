@@ -2,9 +2,9 @@ import { createServer } from 'node:http'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto'
 import { promisify } from 'node:util'
-import { createInvoicePostgres, createProfilePostgres, createSubscriptionPlanPostgres, findRestaurantByIdentifier, findUserByCredentials, getInvoicePostgres, initPostgres, listManagedRestaurantsPostgres, listProfilesPostgres, listSubscriptionPlansPostgres, markInvoiceEmailed, readPostgres, registerRestaurantPostgres, savePostgres, updateManagedRestaurantPostgres, updateRestaurantSubscriptionPostgres } from './db/postgres.mjs'
+import { createInvoicePostgres, createProfilePostgres, createSubscriptionPlanPostgres, createRestaurantDeviceSession, deleteRestaurantDeviceSession, deleteRestaurantDeviceSessions, findRestaurantByIdentifier, findRestaurantDeviceSession, findUserByCredentials, getInvoicePostgres, initPostgres, listManagedRestaurantsPostgres, listProfilesPostgres, listSubscriptionPlansPostgres, markInvoiceEmailed, readPostgres, registerRestaurantPostgres, savePostgres, updateManagedRestaurantPostgres, updateRestaurantSubscriptionPostgres } from './db/postgres.mjs'
 import PDFDocument from 'pdfkit'
 import nodemailer from 'nodemailer'
 
@@ -15,8 +15,8 @@ const tenantDatabaseDirectory = resolve(root, 'db/tenants')
 const subscriptionPlansPath = resolve(root, 'db/subscription-plans.json')
 const port = Number(process.env.PORT || process.env.API_PORT || 8787)
 const sessionDurationMs = 8 * 60 * 60 * 1000
+const restaurantAccessDurationMs = 365 * 24 * 60 * 60 * 1000
 const sessions = new Map()
-const restaurantAccessSessions = new Map()
 const platformSessions = new Map()
 const receiptReviewsInProgress = new Set()
 const scrypt = promisify(scryptCallback)
@@ -125,7 +125,7 @@ async function getPlatformOverview() {
   if (usePostgres) restaurants = await listManagedRestaurantsPostgres()
   else {
     const credentials = await readTenantCredentials()
-    restaurants = credentials.map(({ passwordHash, ...item }) => ({ ...item, planName: plans.find((plan) => plan.id === item.planId)?.name || null, startedAt: item.startedAt || null, expiresAt: item.expiresAt || null, status: item.status || 'active', accessConfigured: true }))
+    restaurants = credentials.map(({ passwordHash, deviceSessions, deviceSessionExpiresAt, ...item }) => ({ ...item, planName: plans.find((plan) => plan.id === item.planId)?.name || null, startedAt: item.startedAt || null, expiresAt: item.expiresAt || null, status: item.status || 'active', accessConfigured: true }))
     if (!restaurants.some((item) => item.id === defaultRestaurantId)) restaurants.push({ id: defaultRestaurantId, identifier: defaultRestaurantId, name: 'Le Mijoté', planId: null, planName: null, startedAt: null, expiresAt: null, status: 'active', accessConfigured: false })
   }
   return { restaurants, plans }
@@ -165,8 +165,13 @@ function requirePlatformOwner(request, response) {
   return session
 }
 
-function revokeRestaurantSessions(restaurantId) {
-  for (const [token, session] of restaurantAccessSessions) if (session.restaurantId === restaurantId) restaurantAccessSessions.delete(token)
+async function revokeRestaurantSessions(restaurantId) {
+  if (usePostgres) await deleteRestaurantDeviceSessions(restaurantId)
+  else {
+    const credentials = await readTenantCredentials()
+    const restaurant = credentials.find((item) => item.id === restaurantId)
+    if (restaurant) { restaurant.deviceSessions = []; await writeTenantCredentials(credentials) }
+  }
   for (const [token, session] of sessions) if (session.restaurantId === restaurantId) sessions.delete(token)
 }
 
@@ -235,14 +240,22 @@ function sessionFrom(request) {
   return { token, ...session }
 }
 
-function restaurantAccessFrom(request) {
+async function restaurantAccessFrom(request) {
   const token = request.headers['x-restaurant-access'] || ''
-  const session = restaurantAccessSessions.get(token)
-  if (!session || session.expiresAt <= Date.now() || session.subscriptionStatus === 'suspended' || (session.subscriptionExpiresAt && new Date(session.subscriptionExpiresAt).getTime() <= Date.now())) {
-    restaurantAccessSessions.delete(token)
-    return null
+  if (!token) return null
+  const tokenHash = createHash('sha256').update(token).digest('hex')
+  let session
+  if (usePostgres) session = await findRestaurantDeviceSession(tokenHash)
+  else {
+    const credentials = await readTenantCredentials()
+    const restaurant = credentials.find((item) => item.deviceSessions?.some((saved) => typeof saved === 'string' ? saved === tokenHash : saved.tokenHash === tokenHash))
+    const savedSession = restaurant?.deviceSessions?.find((saved) => typeof saved === 'string' ? saved === tokenHash : saved.tokenHash === tokenHash)
+    if (restaurant) session = { id: restaurant.id, identifier: restaurant.identifier, name: restaurant.name, status: restaurant.status || 'active', subscriptionExpiresAt: restaurant.expiresAt || null, sessionExpiresAt: typeof savedSession === 'object' ? savedSession.expiresAt : restaurant.deviceSessionExpiresAt || null }
   }
-  return { token, ...session }
+  if (!session) return null
+  const expiresAt = session.sessionExpiresAt ? new Date(session.sessionExpiresAt).getTime() : Infinity
+  if (expiresAt <= Date.now() || session.status === 'suspended' || (session.subscriptionExpiresAt && new Date(session.subscriptionExpiresAt).getTime() <= Date.now())) return null
+  return { token, restaurantId: session.id, identifier: session.identifier, name: session.name, subscriptionStatus: session.status || 'active', subscriptionExpiresAt: session.subscriptionExpiresAt || null, expiresAt }
 }
 
 function roleFrom(request) { return sessionFrom(request)?.role || null }
@@ -396,7 +409,7 @@ const server = createServer(async (request, response) => {
       if (status === 'active' && !plan) return send(response, 400, { error: 'Choisissez une offre active pour attribuer ou renouveler la licence.' })
       const updated = await setRestaurantSubscription(id, plan, status)
       if (!updated) return send(response, 404, { error: 'Restaurant introuvable ou accès initial à configurer' })
-      if (status === 'suspended') revokeRestaurantSessions(id)
+      if (status === 'suspended') await revokeRestaurantSessions(id)
       const refreshed = (await getPlatformOverview()).restaurants.find((restaurant) => restaurant.id === id)
       return send(response, 200, refreshed || updated)
     }
@@ -412,22 +425,39 @@ const server = createServer(async (request, response) => {
       const subscriptionExpiresAt = record.expiresAt || null
       if (subscriptionStatus !== 'active' || (subscriptionExpiresAt && new Date(subscriptionExpiresAt).getTime() <= Date.now())) return send(response, 403, { error: 'Licence suspendue ou expirée. Contactez le propriétaire de l’application.' })
       const token = randomUUID()
-      const expiresAt = Math.min(Date.now() + sessionDurationMs, subscriptionExpiresAt ? new Date(subscriptionExpiresAt).getTime() : Infinity)
-      restaurantAccessSessions.set(token, { restaurantId: record.id, name: record.name, identifier, subscriptionStatus, subscriptionExpiresAt, expiresAt })
-      return send(response, 200, { token, expiresAt, restaurant: { id: record.id, identifier, name: record.name } })
+      const expiresAt = new Date(Date.now() + restaurantAccessDurationMs)
+      const tokenHash = createHash('sha256').update(token).digest('hex')
+      if (usePostgres) await createRestaurantDeviceSession(tokenHash, record.id, expiresAt)
+      else {
+        const credentials = await readTenantCredentials()
+        const restaurant = credentials.find((item) => item.id === record.id)
+        if (!restaurant) return send(response, 401, { error: 'Accès restaurant indisponible' })
+        restaurant.deviceSessions ||= []
+        restaurant.deviceSessions.push({ tokenHash, expiresAt: expiresAt.toISOString() })
+        await writeTenantCredentials(credentials)
+      }
+      return send(response, 200, { token, expiresAt: expiresAt.getTime(), restaurant: { id: record.id, identifier, name: record.name } })
     }
     if (url.pathname === '/api/auth/restaurant' && request.method === 'GET') {
-      const access = restaurantAccessFrom(request)
+      const access = await restaurantAccessFrom(request)
       if (!access) return send(response, 401, { error: 'Connectez-vous d’abord à votre restaurant' })
       return send(response, 200, { restaurant: { id: access.restaurantId, identifier: access.identifier, name: access.name } })
     }
     if (url.pathname === '/api/auth/restaurant' && request.method === 'DELETE') {
-      const access = restaurantAccessFrom(request)
-      if (access) restaurantAccessSessions.delete(access.token)
+      const access = await restaurantAccessFrom(request)
+      if (access) {
+        const tokenHash = createHash('sha256').update(access.token).digest('hex')
+        if (usePostgres) await deleteRestaurantDeviceSession(tokenHash)
+        else {
+          const credentials = await readTenantCredentials()
+          const restaurant = credentials.find((item) => item.id === access.restaurantId)
+          if (restaurant) { restaurant.deviceSessions = (restaurant.deviceSessions || []).filter((saved) => (typeof saved === 'string' ? saved : saved.tokenHash) !== tokenHash); await writeTenantCredentials(credentials) }
+        }
+      }
       return send(response, 204, {})
     }
     if (url.pathname === '/api/auth/profiles' && request.method === 'GET') {
-      const access = restaurantAccessFrom(request)
+      const access = await restaurantAccessFrom(request)
       if (!access) return send(response, 401, { error: 'Connectez-vous d’abord à votre restaurant' })
       const profiles = usePostgres
         ? await listProfilesPostgres(access.restaurantId)
@@ -435,7 +465,7 @@ const server = createServer(async (request, response) => {
       return send(response, 200, profiles)
     }
     if (url.pathname === '/api/auth/login' && request.method === 'POST') {
-      const access = restaurantAccessFrom(request)
+      const access = await restaurantAccessFrom(request)
       if (!access) return send(response, 401, { error: 'Connectez-vous d’abord à votre restaurant' })
       const input = await body(request)
       const user = usePostgres
@@ -459,7 +489,8 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'GET' && !url.pathname.startsWith('/api/')) return serveFrontend(request, response, url.pathname)
     const activeSession = sessionFrom(request)
-    const restaurantId = activeSession?.restaurantId || restaurantAccessFrom(request)?.restaurantId || defaultRestaurantId
+    const restaurantAccess = activeSession ? null : await restaurantAccessFrom(request)
+    const restaurantId = activeSession?.restaurantId || restaurantAccess?.restaurantId || defaultRestaurantId
     const database = await readDatabase(restaurantId)
     if (url.pathname === '/api/profiles' && request.method === 'POST') {
       if (roleFrom(request) !== 'manager') return send(response, 403, { error: 'Seule la gérance peut créer des profils' })

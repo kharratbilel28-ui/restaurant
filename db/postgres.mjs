@@ -5,6 +5,7 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process
 const schema = [
   `CREATE TABLE IF NOT EXISTS subscription_plans (id text PRIMARY KEY, name text NOT NULL UNIQUE, duration_days integer NOT NULL, price numeric(10,2) NOT NULL DEFAULT 0, currency text NOT NULL DEFAULT 'EUR', active boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT now())`,
   `CREATE TABLE IF NOT EXISTS restaurants (id text PRIMARY KEY, identifier text UNIQUE, name text NOT NULL, password_hash text, subscription_plan_id text, subscription_started_at timestamptz, subscription_expires_at timestamptz, subscription_status text NOT NULL DEFAULT 'active', created_at timestamptz NOT NULL DEFAULT now())`,
+  `CREATE TABLE IF NOT EXISTS restaurant_device_sessions (token_hash text PRIMARY KEY, restaurant_id text NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE, expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT now())`,
   `CREATE TABLE IF NOT EXISTS users (restaurant_id text NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE, id text NOT NULL, username text NOT NULL, name text NOT NULL, role text NOT NULL, pin text NOT NULL, PRIMARY KEY (restaurant_id, id))`,
   `CREATE TABLE IF NOT EXISTS reservations (restaurant_id text NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE, id text NOT NULL, reservation_time text NOT NULL, customer_name text NOT NULL, people integer NOT NULL, table_name text NOT NULL, status text NOT NULL, PRIMARY KEY (restaurant_id, id))`,
   `CREATE TABLE IF NOT EXISTS dining_tables (restaurant_id text NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE, id text NOT NULL, seats integer NOT NULL, status text NOT NULL, zone text NOT NULL, PRIMARY KEY (restaurant_id, id))`,
@@ -102,6 +103,23 @@ export async function initPostgres(fallbackState) {
 export async function findRestaurantByIdentifier(identifier) {
   const result = await pool.query('SELECT id, identifier, name, password_hash AS "passwordHash", subscription_status AS status, subscription_expires_at AS "expiresAt" FROM restaurants WHERE identifier = $1', [identifier])
   return result.rows[0] || null
+}
+
+export async function createRestaurantDeviceSession(tokenHash, restaurantId, expiresAt) {
+  await pool.query('INSERT INTO restaurant_device_sessions (token_hash, restaurant_id, expires_at) VALUES ($1, $2, $3)', [tokenHash, restaurantId, expiresAt])
+}
+
+export async function findRestaurantDeviceSession(tokenHash) {
+  const result = await pool.query('SELECT s.restaurant_id AS id, r.identifier, r.name, r.subscription_status AS status, r.subscription_expires_at AS "subscriptionExpiresAt", s.expires_at AS "sessionExpiresAt" FROM restaurant_device_sessions s JOIN restaurants r ON r.id = s.restaurant_id WHERE s.token_hash = $1 AND s.expires_at > now()', [tokenHash])
+  return result.rows[0] || null
+}
+
+export async function deleteRestaurantDeviceSession(tokenHash) {
+  await pool.query('DELETE FROM restaurant_device_sessions WHERE token_hash = $1', [tokenHash])
+}
+
+export async function deleteRestaurantDeviceSessions(restaurantId) {
+  await pool.query('DELETE FROM restaurant_device_sessions WHERE restaurant_id = $1', [restaurantId])
 }
 
 export async function registerRestaurantPostgres({ id, identifier, name, passwordHash, manager, planId, startedAt, expiresAt }) {
