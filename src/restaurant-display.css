@@ -39,7 +39,7 @@
 :root[data-display-mode="low-light"] .module-row small, :root[data-display-mode="low-light"] .legend, :root[data-display-mode="low-light"] .menu-item small, :root[data-display-mode="low-light"] .status-pill { font-size: 11px; }
 :root[data-display-mode="terrace"] .action-button, :root[data-display-mode="terrace"] .primary-button, :root[data-display-mode="terrace"] .payment-actions button,
 :root[data-display-mode="low-light"] .action-button, :root[data-display-mode="low-light"] .primary-button, :root[data-display-mode="low-light"] .payment-actions button { min-height: 44px; padding-inline: 12px; font-size: 12px; }
-:root[data-display-mode="terrace"] .floor-map-table, :root[data-display-mode="low-light"] .floor-map-table { min-width: 58px; min-height: 58px; }
+:root[data-display-mode="terrace"] .floor-map-table, :root[data-display-mode="low-light"] .floor-map-table { width: 58px; height: 58px; min-width: 58px; min-height: 58px; aspect-ratio: 1; border-radius: 6px !important; }
 
 :root[data-display-mode="low-light"] body,
 :root[data-display-mode="low-light"] .login-screen,
@@ -121,6 +121,7 @@ body { overflow-x: hidden; }
 .main-content { min-width: 0; }
 .content-grid > *, .panel, .module-list, .order-form { min-width: 0; max-width: 100%; }
 @media (max-width: 700px) {
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea { font-size: 16px !important; }
   .app-shell { display: block; }
   .main-content { width: 100%; max-width: 100%; min-width: 0; padding: 0 12px 30px; margin: 0; }
   .topbar { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; gap: 7px; width: 100%; min-width: 0; height: auto; min-height: 62px; padding: 7px 0; }
