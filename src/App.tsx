@@ -6,7 +6,7 @@ import { createMenuItem, createOrder, createReservation, createStockWithdrawal, 
 type IconProps = { size?: number }
 type IconComponent = (props: IconProps) => React.ReactNode
 const makeIcon = (symbol: string): IconComponent => ({ size = 18 }) => <span className="local-icon" style={{ fontSize: size - 2 }}>{symbol}</span>
-const Archive = makeIcon('▣'), ArrowUpRight = makeIcon('↗'), Bell = makeIcon('◌'), CalendarDays = makeIcon('▦')
+const Archive = makeIcon('▣'), ArrowUpRight = makeIcon('↗'), Bell = makeIcon('🔔'), CalendarDays = makeIcon('▦')
 const ChevronDown = makeIcon('⌄'), ChefHat = makeIcon('♨'), CircleDollarSign = makeIcon('€'), ClipboardList = makeIcon('☷')
 const Clock3 = makeIcon('◷'), LayoutDashboard = makeIcon('▤'), Map = makeIcon('⌖'), MoreHorizontal = makeIcon('···')
 const Package = makeIcon('□'), Plus = makeIcon('+'), Settings = makeIcon('⚙')
