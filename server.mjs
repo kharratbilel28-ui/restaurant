@@ -218,7 +218,7 @@ async function serveFrontend(request, response, pathname) {
   const filePath = resolve(root, 'dist', `.${requestedPath}`)
   try {
     const content = await readFile(filePath)
-    const contentType = filePath.endsWith('.html') ? 'text/html; charset=utf-8' : filePath.endsWith('.js') ? 'text/javascript; charset=utf-8' : filePath.endsWith('.css') ? 'text/css; charset=utf-8' : 'application/octet-stream'
+    const contentType = filePath.endsWith('.html') ? 'text/html; charset=utf-8' : filePath.endsWith('.js') ? 'text/javascript; charset=utf-8' : filePath.endsWith('.css') ? 'text/css; charset=utf-8' : filePath.endsWith('.json') ? 'application/manifest+json; charset=utf-8' : filePath.endsWith('.svg') ? 'image/svg+xml' : 'application/octet-stream'
     response.writeHead(200, { 'Content-Type': contentType })
     response.end(content)
   } catch {
