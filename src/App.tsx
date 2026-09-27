@@ -230,14 +230,18 @@ function App() {
   const handleOrder = async (items: OrderLine[], amount: number, note: string): Promise<boolean> => {
     if (!selectedTable || orderSubmissionInFlight.current) return false
     orderSubmissionInFlight.current = true
+    const id = crypto.randomUUID()
+    const optimisticOrder: Order = { id, table: selectedTable, items: items.reduce((sum, item) => sum + item.quantity, 0), amount, status: 'received', note, lines: items, createdAt: new Date().toISOString() }
+    setDashboard((current) => current ? { ...current, orders: [optimisticOrder, ...current.orders] } : current)
+    setServerNotice(`Commande #${id} envoyée en cuisine.`)
+    setNotifications((current) => [{ id: `order-sent-${id}`, title: 'Commande envoyée', message: `Commande #${id} de la table ${selectedTable} transmise en cuisine.`, createdAt: new Date().toISOString(), target: 'Prise de commande', read: false }, ...current])
     try {
-      const order = await createOrder({ table: selectedTable, items, amount, note })
-      setDashboard((current) => current ? { ...current, orders: [order, ...current.orders] } : current)
-      setServerNotice(`Commande #${order.id} envoyée en cuisine.`)
-      setNotifications((current) => [{ id: `order-sent-${order.id}`, title: 'Commande envoyée', message: `Commande #${order.id} de la table ${selectedTable} transmise en cuisine.`, createdAt: new Date().toISOString(), target: 'Prise de commande', read: false }, ...current])
+      const order = await createOrder({ id, table: selectedTable, items, amount, note })
+      setDashboard((current) => current ? { ...current, orders: current.orders.map((existing) => existing.id === id ? order : existing) } : current)
       return true
     } catch {
       setApiError('Impossible d’envoyer la commande. Vérifiez le rôle du serveur.')
+      setDashboard((current) => current ? { ...current, orders: current.orders.filter((existing) => existing.id !== id) } : current)
       return false
     } finally {
       orderSubmissionInFlight.current = false

@@ -208,7 +208,7 @@ export const updateOrderStatus = (id: string, status: string, paymentMethod?: 'c
 export const createDiningTable = (table: { id: string; seats: number; zone: string }) => request<RestaurantTable>('/tables', { method: 'POST', body: JSON.stringify(table) })
 export const updateDiningTable = (id: string, table: { id: string; seats: number; zone: string }) => request<RestaurantTable>(`/tables/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(table) })
 export const openCashDrawer = () => request<{ opened: boolean }>('/hardware/cash-drawer', { method: 'POST' })
-export const createOrder = (order: { table: string; items: OrderLine[]; amount: number; note: string }) => request<Order>('/orders', { method: 'POST', body: JSON.stringify({ ...order, id: crypto.randomUUID() }) })
+export const createOrder = (order: { id?: string; table: string; items: OrderLine[]; amount: number; note: string }) => request<Order>('/orders', { method: 'POST', body: JSON.stringify({ ...order, id: order.id || crypto.randomUUID() }) })
 export const getInventory = () => request<InventoryItem[]>('/inventory')
 export const getStockWithdrawals = () => request<StockWithdrawal[]>('/inventory/withdrawals')
 export const getStockReceipts = () => request<StockReceipt[]>('/inventory/receipts')

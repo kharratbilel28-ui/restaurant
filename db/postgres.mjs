@@ -341,4 +341,19 @@ export async function updateOrderStatusPostgres(restaurantId, id, status, paymen
   await pool.query('UPDATE orders SET status = $1, payment_method = COALESCE($2, payment_method) WHERE restaurant_id = $3 AND id = $4', [status, paymentMethod || null, restaurantId, id])
 }
 
+export async function createOrderPostgres(restaurantId, order) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    await client.query('INSERT INTO orders (restaurant_id, id, table_name, item_count, amount, status, note, payment_method, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)', [restaurantId, order.id, order.table, order.items, order.amount, order.status, order.note || '', order.paymentMethod || null, order.createdAt])
+    for (const [index, line] of order.lines.entries()) await client.query('INSERT INTO order_lines (restaurant_id, order_id, line_index, name, quantity, price) VALUES ($1, $2, $3, $4, $5, $6)', [restaurantId, order.id, index, line.name, line.quantity, line.price])
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
 export async function closePostgres() { await pool.end() }

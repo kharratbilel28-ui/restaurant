@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto'
 import { promisify } from 'node:util'
-import { createInvoicePostgres, createProfilePostgres, createSubscriptionPlanPostgres, createRestaurantDeviceSession, deleteRestaurantDeviceSession, deleteRestaurantDeviceSessions, findRestaurantByIdentifier, findRestaurantDeviceSession, findUserByCredentials, getInvoicePostgres, initPostgres, listManagedRestaurantsPostgres, listProfilesPostgres, listSubscriptionPlansPostgres, markInvoiceEmailed, readPostgres, registerRestaurantPostgres, savePostgres, updateManagedRestaurantPostgres, updateOrderStatusPostgres, updateRestaurantSubscriptionPostgres } from './db/postgres.mjs'
+import { createInvoicePostgres, createOrderPostgres, createProfilePostgres, createSubscriptionPlanPostgres, createRestaurantDeviceSession, deleteRestaurantDeviceSession, deleteRestaurantDeviceSessions, findRestaurantByIdentifier, findRestaurantDeviceSession, findUserByCredentials, getInvoicePostgres, initPostgres, listManagedRestaurantsPostgres, listProfilesPostgres, listSubscriptionPlansPostgres, markInvoiceEmailed, readPostgres, registerRestaurantPostgres, savePostgres, updateManagedRestaurantPostgres, updateOrderStatusPostgres, updateRestaurantSubscriptionPostgres } from './db/postgres.mjs'
 import PDFDocument from 'pdfkit'
 import nodemailer from 'nodemailer'
 
@@ -787,7 +787,8 @@ const server = createServer(async (request, response) => {
       }
       const order = { id: orderId, table: input.table, items: lines.reduce((sum, item) => sum + item.quantity, 0), amount: Number(input.amount || 0), status: 'received', note: input.note || '', lines, createdAt: input.createdAt || new Date().toISOString() }
       database.orders.unshift(order)
-      await saveDatabase(database, restaurantId)
+      if (usePostgres) await createOrderPostgres(restaurantId, order)
+      else await saveDatabase(database, restaurantId)
       return send(response, 201, order)
     }
     if (url.pathname.startsWith('/api/orders/') && request.method === 'PATCH') {
