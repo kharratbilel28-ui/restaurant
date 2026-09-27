@@ -337,4 +337,8 @@ export async function savePostgres(restaurantId, state) {
   }
 }
 
+export async function updateOrderStatusPostgres(restaurantId, id, status, paymentMethod) {
+  await pool.query('UPDATE orders SET status = $1, payment_method = COALESCE($2, payment_method) WHERE restaurant_id = $3 AND id = $4', [status, paymentMethod || null, restaurantId, id])
+}
+
 export async function closePostgres() { await pool.end() }

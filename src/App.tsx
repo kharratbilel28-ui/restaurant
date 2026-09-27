@@ -39,13 +39,14 @@ if (typeof window !== 'undefined') window.addEventListener('beforeinstallprompt'
 function PwaInstallPrompt({ installEvent, onInstalled }: { installEvent: PwaInstallPromptEvent | null; onInstalled: React.Dispatch<React.SetStateAction<PwaInstallPromptEvent | null>> }) {
   const [dismissed, setDismissed] = useState(() => sessionStorage.getItem('pwa-install-dismissed') === '1')
   const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent)
+  const isAndroid = /android/i.test(navigator.userAgent)
   useEffect(() => {
     const handleInstalled = () => { queuedPwaInstallEvent = null; onInstalled(null) }
     window.addEventListener('appinstalled', handleInstalled)
     return () => window.removeEventListener('appinstalled', handleInstalled)
   }, [onInstalled])
   const installed = window.matchMedia('(display-mode: standalone)').matches || (navigator as Navigator & { standalone?: boolean }).standalone === true
-  if (installed || dismissed || (!isIos && !installEvent)) return null
+  if (installed || dismissed || (!isIos && !isAndroid && !installEvent)) return null
   const dismiss = () => { sessionStorage.setItem('pwa-install-dismissed', '1'); setDismissed(true) }
   const install = async () => {
     if (!installEvent) return
@@ -53,7 +54,7 @@ function PwaInstallPrompt({ installEvent, onInstalled }: { installEvent: PwaInst
     const choice = await installEvent.userChoice
     if (choice.outcome === 'accepted') onInstalled(null)
   }
-  return <aside className="pwa-install-prompt" aria-label="Installer ServicePilot"><div className="pwa-install-mark" aria-hidden="true">S</div><div className="pwa-install-copy"><strong>Ajouter ServicePilot à l’écran d’accueil</strong><span>{isIos ? 'Dans Safari : Partager, puis « Sur l’écran d’accueil ».' : 'Accède à la caisse et aux commandes comme à une application.'}</span></div><div className="pwa-install-actions">{installEvent && <button className="pwa-install-button" onClick={install}>Installer</button>}<button className="pwa-install-dismiss" onClick={dismiss} aria-label="Masquer la proposition">Plus tard</button></div></aside>
+  return <aside className="pwa-install-prompt" aria-label="Installer ServicePilot"><div className="pwa-install-mark" aria-hidden="true">S</div><div className="pwa-install-copy"><strong>Ajouter ServicePilot à l’écran d’accueil</strong><span>{isIos ? 'Dans Safari : Partager, puis « Sur l’écran d’accueil ».' : installEvent ? 'Installe l’application pour retrouver rapidement la caisse et les commandes.' : 'Dans Chrome : menu ⋮, puis « Installer l’application » ou « Ajouter à l’écran d’accueil ».'}</span></div><div className="pwa-install-actions">{installEvent && <button className="pwa-install-button" onClick={install}>Installer</button>}<button className="pwa-install-dismiss" onClick={dismiss} aria-label="Masquer la proposition">Plus tard</button></div></aside>
 }
 
 function App() {
@@ -243,7 +244,15 @@ function App() {
     }
   }
   const handleOrderStatus = async (id: string, status: string, paymentMethod?: 'cash' | 'card') => {
-    try { const updated = await updateOrderStatus(id, status, paymentMethod); setDashboard((current) => current ? { ...current, orders: current.orders.map((order) => order.id === id ? updated : order) } : current) } catch { setApiError('Impossible de modifier le statut de la commande.') }
+    const previousOrder = dashboard?.orders.find((order) => order.id === id)
+    setDashboard((current) => current ? { ...current, orders: current.orders.map((order) => order.id === id ? { ...order, status: status as Order['status'], paymentMethod: paymentMethod ?? order.paymentMethod } : order) } : current)
+    try {
+      const updated = await updateOrderStatus(id, status, paymentMethod)
+      setDashboard((current) => current ? { ...current, orders: current.orders.map((order) => order.id === id ? updated : order) } : current)
+    } catch {
+      setApiError('Impossible de modifier le statut de la commande.')
+      if (previousOrder) setDashboard((current) => current ? { ...current, orders: current.orders.map((order) => order.id === id ? previousOrder : order) } : current)
+    }
   }
   const handleCashDrawer = async () => { try { await openCashDrawer(); setServerNotice('Ordre d’ouverture envoyé au tiroir-caisse.') } catch { setApiError('Le tiroir-caisse n’est pas connecté.') } }
   const handleStock = async (id: string, quantity: number) => {
@@ -340,9 +349,9 @@ function App() {
   const handleLogout = async () => { try { await logout() } finally { localStorage.removeItem('restaurant-token'); localStorage.removeItem('restaurant-user-id'); localStorage.removeItem('restaurant-user-snapshot'); setSessionUser(null); setDashboard(null); setSessionReady(true); setActiveNav('Vue d’ensemble') } }
   const handleRestaurantLogout = async () => { await Promise.allSettled([logout(), logoutRestaurant()]); localStorage.removeItem('restaurant-token'); localStorage.removeItem('restaurant-user-id'); localStorage.removeItem('restaurant-user-snapshot'); localStorage.removeItem('restaurant-access-token'); localStorage.removeItem('restaurant-identifier'); localStorage.removeItem('restaurant-context-snapshot'); localStorage.removeItem('restaurant-profiles-snapshot'); setSessionUser(null); setRestaurantContext(null); setProfiles([]); setDashboard(null); setSessionReady(true); setActiveNav('Vue d’ensemble') }
 
-  const authView = restaurantContext
+  const authView = <div className="auth-entry-screen"><PwaInstallPrompt installEvent={pwaInstallEvent} onInstalled={setPwaInstallEvent} />{restaurantContext
     ? <LoginScreen restaurant={restaurantContext} profiles={profiles} onLogin={async (username, pin) => { const session = await login(username, pin); await handleTeamLogin(session.user, session.token) }} onSwitchRestaurant={handleRestaurantLogout} />
-    : <RestaurantAccessScreenV2 onLogin={handleRestaurantLogin} onPlatformAccess={() => setPlatformLoginMode(true)} />
+    : <RestaurantAccessScreenV2 onLogin={handleRestaurantLogin} onPlatformAccess={() => setPlatformLoginMode(true)} />}</div>
 
   const renderView = () => {
     if (activeNav === 'Vue d’ensemble') return <DashboardView dashboard={dashboard} tables={tables} tableZones={tableZones} reservations={reservations} onNavigate={setActiveNav} onTableSelect={(id) => { setSelectedTable(id); setActiveNav('Prise de commande') }} />
@@ -375,7 +384,6 @@ function App() {
       <div className="sidebar-footer"><div className="support-icon"><Bell size={17} /></div><div><strong>Besoin d’aide ?</strong><small>Centre de support</small></div><ArrowUpRight size={15} /></div>
     </aside>
     <main className="main-content">
-      <PwaInstallPrompt installEvent={pwaInstallEvent} onInstalled={setPwaInstallEvent} />
       {sessionUser && (!networkOnline || offlineQueue.pending > 0 || offlineQueue.failed > 0) && <div className={`offline-status ${!networkOnline ? 'is-offline' : offlineQueue.failed ? 'has-failures' : 'is-pending'}`} role="status" aria-live="polite"><strong>{!networkOnline ? 'Mode hors ligne' : offlineQueue.failed ? 'Synchronisation à vérifier' : 'Synchronisation en cours'}</strong><span>{!networkOnline ? `Consultation locale active · ${offlineQueue.pending} action(s) en attente d’envoi.` : offlineQueue.failed ? `${offlineQueue.failed} action(s) n’ont pas pu être synchronisées. Vérifie ta connexion et les permissions du profil.` : `${offlineQueue.pending} action(s) seront envoyées au restaurant.`}</span></div>}
       <div className="display-mode-control" role="group" aria-label="Mode d’affichage"><span>Affichage</span><button className={displayMode === 'terrace' ? 'selected' : ''} aria-pressed={displayMode === 'terrace'} onClick={() => setDisplayMode('terrace')}>Terrasse</button><button className={displayMode === 'low-light' ? 'selected' : ''} aria-pressed={displayMode === 'low-light'} onClick={() => setDisplayMode('low-light')}>Salle sombre</button></div>
       <header className="topbar"><button className="mobile-menu-button" aria-label="Ouvrir le menu" onClick={() => setMobileNavOpen(!mobileNavOpen)}>☰</button><div className="breadcrumb"><button className="home-button" onClick={() => setActiveNav(role === 'manager' ? 'Vue d’ensemble' : role === 'kitchen' ? 'Cuisine' : role === 'cashier' ? 'Caisse & paiements' : 'Prise de commande')}>Accueil</button><span className="dot">·</span><span>Bonjour {sessionUser.name}</span><span className="dot">·</span><span className="muted">Jeudi 24 septembre 2026</span></div><div className="top-actions"><div className="notification-wrap"><button className="icon-button notification" aria-label="Notifications" aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}><Bell size={19} />{notifications.some((item) => !item.read) && <i />}</button>{notificationsOpen && <section className="notification-panel" aria-label="Centre de notifications"><header className="notification-panel-header"><div><strong>Notifications</strong><span>{notifications.filter((item) => !item.read).length} non lue(s)</span></div><button onClick={() => setNotifications((items) => items.map((item) => ({ ...item, read: true })))}>Tout lire</button></header><div className="notification-list">{notifications.length ? notifications.map((item) => <button key={item.id} className={`notification-item ${item.read ? 'read' : 'unread'}`} onClick={() => { setNotifications((items) => items.map((current) => current.id === item.id ? { ...current, read: true } : current)); setActiveNav(item.target); setNotificationsOpen(false) }}><span className="notification-avatar"><Bell size={15} /></span><span className="notification-copy"><strong>{item.title}</strong><span>{item.message}</span><time>{formatNotificationTime(item.createdAt)}</time></span>{!item.read && <i className="unread-dot" />}</button>) : <p className="notification-empty">Vous êtes à jour. Aucune notification.</p>}</div></section>}</div><div className="profile"><span className="avatar profile-avatar">{sessionUser.name.slice(0, 2).toUpperCase()}</span><span><strong>{sessionUser.name}</strong><small>{role === 'manager' ? 'Gérante' : role === 'server' ? 'Serveur' : role === 'kitchen' ? 'Cuisine' : 'Caissier'}</small></span></div><button className="logout-button" onClick={handleLogout}>Déconnexion</button></div></header>
